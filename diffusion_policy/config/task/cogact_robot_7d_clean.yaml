@@ -1,9 +1,9 @@
 name: cogact_robot_7d_clean
 
-# CogAct CLEAN dataset (starting from episode 65)
-# Image resolution: 640x480 (resized from 1920x1080)
-image_shape: [3, 480, 640]
-dataset_path: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_640x480.zarr
+# CogAct CLEAN dataset (starting from episode 66)
+# Image resolution: 320x180 (resized from 1920x1080, optimized for training)
+image_shape: [3, 180, 320]
+dataset_path: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_320x180_8d.zarr
 
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
@@ -18,7 +18,7 @@ shape_meta: &shape_meta
       shape: [1]  # gripper state (0=open, 1=closed)
       type: low_dim
   action:
-    shape: [7]  # [x, y, z, qx, qy, qz, qw]
+    shape: [8]  # [x, y, z, qx, qy, qz, qw, gripper]
 
 env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner

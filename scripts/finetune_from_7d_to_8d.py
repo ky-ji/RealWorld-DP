@@ -2,10 +2,16 @@
 """
 从 7D action 模型微调到 8D action 模型
 加载旧模型的大部分参数，只重新初始化 action 输出层
+
+功能：
+1. 适配模型参数（7D → 8D）
+2. 可选：直接启动训练
 """
 
 import torch
 import dill
+import os
+import sys
 from pathlib import Path
 
 def load_and_adapt_checkpoint(

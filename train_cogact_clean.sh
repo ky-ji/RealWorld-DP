@@ -14,15 +14,15 @@ echo ""
 echo "GPU: $GPU_ID"
 echo ""
 echo "Dataset Configuration:"
-echo "  Path: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_640x480.zarr"
-echo "  Episodes: ~89 (episode_0065 to episode_0152)"
-echo "  Image resolution: 640x480"
-echo "  Action space: 7D (x, y, z, qx, qy, qz, qw)"
+echo "  Path: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_320x180_8d.zarr"
+echo "  Episodes: ~96 (episode_0066 onwards)"
+echo "  Image resolution: 320x180 (optimized for training speed)"
+echo "  Action space: 8D (x, y, z, qx, qy, qz, qw, gripper)"
 echo ""
 echo "Model: Diffusion Transformer"
 echo "  - 8 layers, 4 heads, 256 embedding dim"
 echo "  - ~20M parameters"
-echo "  - 90% crop (432x576 from 480x640)"
+echo "  - 90% crop (162x288 from 180x320)"
 echo ""
 echo "Training Settings:"
 echo "  - 600 epochs"
@@ -33,6 +33,7 @@ echo "  - Delta action mode: enabled"
 echo ""
 echo "Logs: wandb (project: diffusion_policy_cogact_clean)"
 echo "Output: data/outputs/[timestamp]_train_diffusion_transformer_hybrid_cogact_robot_7d_clean/"
+echo "Note: Model will learn gripper control (8D action)"
 echo ""
 echo "============================================================"
 echo ""
@@ -43,24 +44,25 @@ source ~/storage/anaconda3/etc/profile.d/conda.sh
 conda activate robodiff
 
 # Check if dataset exists
-DATASET_PATH="/home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_640x480.zarr"
+DATASET_PATH="/home/kyji/public/dataset/cogact/1124/diffusion_policy_data_clean_320x180_8d.zarr"
 if [ ! -d "$DATASET_PATH" ]; then
-    echo "❌ Error: Clean dataset not found at $DATASET_PATH"
+    echo "❌ Error: 8D clean dataset not found at $DATASET_PATH"
     echo "Please run the conversion script first:"
     echo "  python scripts/convert_cogact_to_zarr.py \\"
     echo "    --input /home/kyji/public/dataset/cogact/1124/trajectories \\"
     echo "    --output $DATASET_PATH \\"
-    echo "    --resolution 640 480 \\"
-    echo "    --start-episode 65"
+    echo "    --resolution 320 180 \\"
+    echo "    --start-episode 66"
     exit 1
 fi
 
 echo "✓ Clean dataset found"
 echo ""
 
-# Run training
+# Run training with 8D dataset
 echo "Starting training on GPU $GPU_ID..."
-CUDA_VISIBLE_DEVICES=$GPU_ID python train.py --config-name=train_cogact_robot_clean
+CUDA_VISIBLE_DEVICES=$GPU_ID python train.py --config-name=train_cogact_robot_clean \
+    task.dataset.zarr_path="$DATASET_PATH"
 
 echo ""
 echo "============================================================"

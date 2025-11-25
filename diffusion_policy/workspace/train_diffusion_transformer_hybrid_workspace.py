@@ -66,6 +66,33 @@ class TrainDiffusionTransformerHybridWorkspace(BaseWorkspace):
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+        else:
+            # 如果不是 resume，检查是否有预训练权重需要加载
+            pretrained_path = pathlib.Path("data/pretrained/cogact_7d_to_8d_init.ckpt")
+            if pretrained_path.is_file():
+                print(f"[训练] 加载预训练权重: {pretrained_path}")
+                try:
+                    import dill
+                    payload = torch.load(open(pretrained_path, 'rb'), pickle_module=dill)
+                    
+                    if 'state_dicts' in payload:
+                        missing_keys, unexpected_keys = self.model.load_state_dict(
+                            payload['state_dicts'], strict=False
+                        )
+                        print(f"[训练]   缺失的键: {len(missing_keys)} (将随机初始化)")
+                        print(f"[训练]   意外的键: {len(unexpected_keys)}")
+                        if len(missing_keys) > 0 and len(missing_keys) <= 5:
+                            print(f"[训练]   缺失键示例: {missing_keys}")
+                        
+                        # 同步到 EMA 模型
+                        if cfg.training.use_ema and self.ema_model is not None:
+                            self.ema_model.load_state_dict(payload['state_dicts'], strict=False)
+                            print(f"[训练]   EMA 模型也已加载预训练权重")
+                    
+                    print("[训练] ✓ 预训练权重加载完成")
+                except Exception as e:
+                    print(f"[训练] ⚠ 加载预训练权重失败: {e}")
+                    print("[训练] 将从头开始训练")
 
         # configure dataset
         dataset: BaseImageDataset

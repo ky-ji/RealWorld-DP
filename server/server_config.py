@@ -10,20 +10,23 @@
 
 # 服务器配置
 SERVER_IP = "0.0.0.0"              # 监听所有网卡
-SERVER_PORT = 8006                 # 推理服务器端口
+SERVER_PORT = 8006               # 推理服务器端口
 
 # 模型配置
 # 示例路径 (请根据实际训练输出更新):
 # - train_cogact.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d/checkpoints/
 # - train_cogact_clean.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d_clean/checkpoints/
-CHECKPOINT_PATH = "/home/kyji/storage_net/realworld_eval/diffusion_policy/data/outputs/2025.11.24/04.23.47_train_diffusion_transformer_hybrid_cogact_robot_7d/checkpoints/epoch=0550-train_loss=0.017.ckpt"
+CHECKPOINT_PATH = "/home/kyji/storage_net/realworld_eval/diffusion_policy/data/outputs/2025.11.25/01.12.39_train_diffusion_transformer_hybrid_cogact_robot_7d/checkpoints/epoch=0500-train_loss=0.018.ckpt"
 USE_EMA = True                     # 是否使用 EMA 模型
 
 # 推理配置
 DEVICE = "cuda:1"                  # 推理设备 (cuda:0, cuda:1, cuda:2, cuda:3 或 cpu)
                                    # GPU 0 被训练占用，使用 GPU 1
-NUM_INFERENCE_STEPS = 100          # DDIM 推理步数（降低步数可加快推理速度）
-INFERENCE_FREQ = 30.0              # 推理频率 (Hz)
+SCHEDULER_TYPE = "DDIM"            # Scheduler 类型: "DDIM" 或 "DDPM"
+NUM_INFERENCE_STEPS = 40          # 推理步数（降低步数可加快推理速度）
+                                   # DDIM: 通常 10-50 步即可
+                                   # DDPM: 通常需要 50-100 步
+INFERENCE_FREQ = 10.0              # 推理频率 (Hz)
 
 # 图像配置
 IMAGE_QUALITY = 85                 # JPEG 图像质量 (1-100)

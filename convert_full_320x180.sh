@@ -8,7 +8,7 @@ echo "Converting CogAct Full Dataset to 320x180"
 echo "============================================================"
 echo ""
 echo "Input:  /home/kyji/public/dataset/cogact/1124/trajectories"
-echo "Output: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180.zarr"
+echo "Output: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180_8d.zarr"
 echo "Resolution: 320x180 (optimal for training speed and performance)"
 echo ""
 echo "This will take approximately 15-30 minutes..."
@@ -20,10 +20,10 @@ echo ""
 source ~/storage/anaconda3/etc/profile.d/conda.sh
 conda activate robodiff
 
-# Run conversion
+# Run conversion with 8D action (pose + gripper)
 python scripts/convert_cogact_to_zarr.py \
     --input /home/kyji/public/dataset/cogact/1124/trajectories \
-    --output /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180.zarr \
+    --output /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180_8d.zarr \
     --resolution 320 180
 
 echo ""
@@ -32,7 +32,7 @@ echo "Conversion complete!"
 echo "============================================================"
 echo ""
 echo "Next steps:"
-echo "1. Update cogact_robot_7d.yaml to use the new dataset path"
-echo "2. Update image_shape to [3, 180, 320]"
-echo "3. Restart training with much faster data loading!"
+echo "1. Dataset includes 8D action (7D pose + 1D gripper)"
+echo "2. Use train_cogact.sh to start training"
+echo "3. Model will learn gripper control!"
 echo ""

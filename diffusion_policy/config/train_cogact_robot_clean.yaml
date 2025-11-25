@@ -38,8 +38,8 @@ policy:
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
 
-  # Crop settings for 640x480 images
-  crop_shape: [432, 576]  # ch, cw - 90% crop from 480x640
+  # Crop settings for 320x180 images
+  crop_shape: [162, 288]  # ch, cw - 90% crop from 180x320
   obs_encoder_group_norm: True
   eval_fixed_crop: True
 

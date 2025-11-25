@@ -30,7 +30,7 @@ from diffusion_policy.real_world.real_inference_util import get_real_obs_dict
 
 from server_config import (
     SERVER_IP, SERVER_PORT, CHECKPOINT_PATH, USE_EMA,
-    DEVICE, NUM_INFERENCE_STEPS, INFERENCE_FREQ,
+    DEVICE, SCHEDULER_TYPE, NUM_INFERENCE_STEPS, INFERENCE_FREQ,
     SOCKET_TIMEOUT, BUFFER_SIZE, ENCODING, MAX_CLIENTS, VERBOSE
 )
 
@@ -42,6 +42,7 @@ class DPInferenceServerSSH:
                  checkpoint_path: str = CHECKPOINT_PATH,
                  use_ema: bool = USE_EMA,
                  device: str = DEVICE,
+                 scheduler_type: str = SCHEDULER_TYPE,
                  num_inference_steps: int = NUM_INFERENCE_STEPS,
                  inference_freq: float = INFERENCE_FREQ,
                  server_ip: str = SERVER_IP,
@@ -53,6 +54,7 @@ class DPInferenceServerSSH:
         self.checkpoint_path = checkpoint_path
         self.use_ema = use_ema
         self.device = device
+        self.scheduler_type = scheduler_type.upper()  # 统一转为大写
         self.num_inference_steps = num_inference_steps
         self.inference_freq = inference_freq
         self.server_ip = server_ip
@@ -98,19 +100,32 @@ class DPInferenceServerSSH:
             
             self.policy.eval().to(self.device)
             
-            # 修改为 DDPM scheduler 并设置推理步数
-            from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-            
-            # 创建 DDPM scheduler（使用与训练时相同的配置）
-            self.policy.noise_scheduler = DDPMScheduler(
-                num_train_timesteps=100,
-                beta_start=0.0001,
-                beta_end=0.02,
-                beta_schedule='squaredcos_cap_v2',
-                clip_sample=True,
-                prediction_type='epsilon',
-                variance_type='fixed_small'
-            )
+            # 根据配置创建 Scheduler
+            if self.scheduler_type == "DDIM":
+                from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+                print(f"[推理服务器] 使用 DDIM Scheduler")
+                self.policy.noise_scheduler = DDIMScheduler(
+                    num_train_timesteps=100,
+                    beta_start=0.0001,
+                    beta_end=0.02,
+                    beta_schedule='squaredcos_cap_v2',
+                    clip_sample=True,
+                    prediction_type='epsilon'
+                )
+            elif self.scheduler_type == "DDPM":
+                from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+                print(f"[推理服务器] 使用 DDPM Scheduler")
+                self.policy.noise_scheduler = DDPMScheduler(
+                    num_train_timesteps=100,
+                    beta_start=0.0001,
+                    beta_end=0.02,
+                    beta_schedule='squaredcos_cap_v2',
+                    clip_sample=True,
+                    prediction_type='epsilon',
+                    variance_type='fixed_small'
+                )
+            else:
+                raise ValueError(f"不支持的 Scheduler 类型: {self.scheduler_type}，请使用 'DDIM' 或 'DDPM'")
             
             # 设置推理步数
             self.policy.num_inference_steps = self.num_inference_steps
@@ -134,7 +149,7 @@ class DPInferenceServerSSH:
             print(f"[推理服务器] RGB 观测键: {self.obs_keys['rgb']}")
             print(f"[推理服务器] Low-dim 观测键: {self.obs_keys['lowdim']}")
             print(f"[推理服务器] 动作模式: 绝对位姿 (Absolute Pose)")
-            print(f"[推理服务器] Scheduler: DDPM (50 steps)")
+            print(f"[推理服务器] Scheduler: {self.scheduler_type} ({self.num_inference_steps} steps)")
             
             # 预热模型
             self._warmup_model()
@@ -205,6 +220,7 @@ class DPInferenceServerSSH:
         print(f"\n配置:")
         print(f"  监听地址: {self.server_ip}:{self.server_port}")
         print(f"  推理设备: {self.device}")
+        print(f"  Scheduler: {self.scheduler_type}")
         print(f"  推理步数: {self.num_inference_steps}")
         print(f"  推理频率: {self.inference_freq} Hz")
         print(f"\n按 Ctrl+C 停止\n")
