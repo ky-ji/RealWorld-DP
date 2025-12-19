@@ -4,12 +4,8 @@
 # This resolution is optimal for robot manipulation tasks
 
 echo "============================================================"
-echo "Converting CogAct Full Dataset to 320x180"
+echo "Converting Dataset to 320x180"
 echo "============================================================"
-echo ""
-echo "Input:  /home/kyji/public/dataset/cogact/1124/trajectories"
-echo "Output: /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180_8d.zarr"
-echo "Resolution: 320x180 (optimal for training speed and performance)"
 echo ""
 echo "This will take approximately 15-30 minutes..."
 echo ""
@@ -21,10 +17,13 @@ source ~/storage/anaconda3/etc/profile.d/conda.sh
 conda activate robodiff
 
 # Run conversion with 8D action (pose + gripper)
-python scripts/convert_cogact_to_zarr.py \
-    --input /home/kyji/public/dataset/cogact/1124/trajectories \
-    --output /home/kyji/public/dataset/cogact/1124/diffusion_policy_data_full_320x180_8d.zarr \
+python data_scripts/convert_cogact_to_zarr.py \
+    --input  /home/kyji/public/dataset/voy/assembly_chocolate/20251218_no_depth\
+    --output /home/kyji/public/dataset/voy/assembly_chocolate/20251218_no_depth_320_180_8d.zarr \
     --resolution 320 180
+
+
+
 
 echo ""
 echo "============================================================"

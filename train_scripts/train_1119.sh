@@ -19,4 +19,4 @@ echo "Checkpoints will be saved every 50 epochs"
 echo ""
 
 # Run training
-python train.py --config-name=train_real_robot_7d
+python ../train.py --config-name=train_real_robot_7d

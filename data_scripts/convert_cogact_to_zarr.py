@@ -64,8 +64,16 @@ def load_episode_data(episode_path: Path,
     
     n_steps = meta['n_steps']
     
+    # Check if Images folder exists and rename to images
+    images_dir_upper = episode_path / "Images"
+    images_dir_lower = episode_path / "images"
+    
+    if images_dir_upper.exists() and not images_dir_lower.exists():
+        images_dir_upper.rename(images_dir_lower)
+        print(f"  -> Renamed 'Images' to 'images' in {episode_path.name}")
+    
     # Load images
-    images_dir = episode_path / "images"
+    images_dir = images_dir_lower
     image_files = sorted(list(images_dir.glob("frame_*.jpg")))
     
     # Handle mismatch between image count and steps

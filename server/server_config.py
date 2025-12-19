@@ -22,8 +22,8 @@ USE_EMA = True                     # 是否使用 EMA 模型
 # 推理配置
 DEVICE = "cuda:1"                  # 推理设备 (cuda:0, cuda:1, cuda:2, cuda:3 或 cpu)
                                    # GPU 0 被训练占用，使用 GPU 1
-SCHEDULER_TYPE = "DDIM"            # Scheduler 类型: "DDIM" 或 "DDPM"
-NUM_INFERENCE_STEPS = 40          # 推理步数（降低步数可加快推理速度）
+SCHEDULER_TYPE = "DDPM"            # Scheduler 类型: "DDIM" 或 "DDPM"
+NUM_INFERENCE_STEPS = 100          # 推理步数（降低步数可加快推理速度）
                                    # DDIM: 通常 10-50 步即可
                                    # DDPM: 通常需要 50-100 步
 INFERENCE_FREQ = 10.0              # 推理频率 (Hz)
