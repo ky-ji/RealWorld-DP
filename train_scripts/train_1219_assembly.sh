@@ -29,7 +29,7 @@ echo ""
 
 # Run training with 8D dataset
 echo "Starting training on GPU $GPU_ID..."
-CUDA_VISIBLE_DEVICES=$GPU_ID python train.py --config-name=train_cogact_robot \
+CUDA_VISIBLE_DEVICES=$GPU_ID python train.py --config-name=train_assembly_chocolate \
     task.dataset.zarr_path="$DATASET_PATH"
 
 echo ""
