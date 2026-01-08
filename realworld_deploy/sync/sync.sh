@@ -47,13 +47,9 @@ build_ssh_cmd() {
     local host=$1
     local user=$2
     local port=$3
-    local key=$4
+    local password=$4
     
-    local cmd="ssh"
-    if [ -n "$key" ] && [ -f "$key" ]; then
-        cmd="$cmd -i $key"
-    fi
-    cmd="$cmd -p $port ${user}@${host}"
+    local cmd="ssh -p $port ${user}@${host}"
     echo "$cmd"
 }
 
@@ -62,14 +58,11 @@ build_rsync_cmd() {
     local host=$1
     local user=$2
     local port=$3
-    local key=$4
+    local password=$4
     local dry_run=$5
     
-    local ssh_opts="-e \"ssh -p $port"
-    if [ -n "$key" ] && [ -f "$key" ]; then
-        ssh_opts="$ssh_opts -i $key"
-    fi
-    ssh_opts="$ssh_opts\""
+    local ssh_cmd="ssh -p $port"
+    local ssh_opts="-e \"$ssh_cmd\""
     
     local cmd="rsync -avz --progress"
     if [ "$dry_run" = "true" ]; then
@@ -84,13 +77,16 @@ check_ssh() {
     local host=$1
     local user=$2
     local port=$3
-    local key=$4
+    local password=$4
     local name=$5
     
     echo -e "${BLUE}[检查] ${name} SSH 连接...${NC}"
+    echo -e "${YELLOW}  请输入密码:${NC}"
     
-    local ssh_cmd=$(build_ssh_cmd "$host" "$user" "$port" "$key")
-    if $ssh_cmd "echo 'ok'" > /dev/null 2>&1; then
+    local ssh_cmd=$(build_ssh_cmd "$host" "$user" "$port" "$password")
+    
+    # 不重定向输出，让用户看到密码提示
+    if eval "$ssh_cmd \"echo 'ok'\"" 2>&1; then
         echo -e "${GREEN}✓ ${name} 连接成功${NC}"
         return 0
     else
@@ -113,14 +109,14 @@ sync_to_robot() {
     echo ""
     
     # 检查连接
-    if ! check_ssh "$ROBOT_HOST" "$ROBOT_USER" "$ROBOT_PORT" "$ROBOT_SSH_KEY" "真机主机"; then
+    if ! check_ssh "$ROBOT_HOST" "$ROBOT_USER" "$ROBOT_PORT" "$ROBOT_PASSWORD" "真机主机"; then
         return 1
     fi
     
     # 创建远程目录
-    local ssh_cmd=$(build_ssh_cmd "$ROBOT_HOST" "$ROBOT_USER" "$ROBOT_PORT" "$ROBOT_SSH_KEY")
     echo -e "${BLUE}[创建] 远程目录...${NC}"
-    $ssh_cmd "mkdir -p ${target_dir}"
+    local ssh_cmd=$(build_ssh_cmd "$ROBOT_HOST" "$ROBOT_USER" "$ROBOT_PORT" "$ROBOT_PASSWORD")
+    eval "$ssh_cmd \"mkdir -p ${target_dir}\""
     
     # 构建排除参数
     local exclude_args=$(build_exclude_args)
@@ -133,11 +129,8 @@ sync_to_robot() {
         echo -e "${YELLOW}(预览模式 - 不会实际传输文件)${NC}"
     fi
     
-    local ssh_opt="-e \"ssh -p ${ROBOT_PORT}"
-    if [ -n "$ROBOT_SSH_KEY" ] && [ -f "$ROBOT_SSH_KEY" ]; then
-        ssh_opt="$ssh_opt -i ${ROBOT_SSH_KEY}"
-    fi
-    ssh_opt="$ssh_opt\""
+    local ssh_cmd="ssh -p ${ROBOT_PORT}"
+    local ssh_opt="-e \"$ssh_cmd\""
     
     eval $rsync_base $ssh_opt $exclude_args \
         "${REALWORLD_DEPLOY_DIR}/robot_inference/" \
@@ -165,14 +158,14 @@ sync_to_server() {
     echo ""
     
     # 检查连接
-    if ! check_ssh "$SERVER_HOST" "$SERVER_USER" "$SERVER_PORT" "$SERVER_SSH_KEY" "推理服务器"; then
+    if ! check_ssh "$SERVER_HOST" "$SERVER_USER" "$SERVER_PORT" "$SERVER_PASSWORD" "推理服务器"; then
         return 1
     fi
     
     # 创建远程目录
-    local ssh_cmd=$(build_ssh_cmd "$SERVER_HOST" "$SERVER_USER" "$SERVER_PORT" "$SERVER_SSH_KEY")
     echo -e "${BLUE}[创建] 远程目录...${NC}"
-    $ssh_cmd "mkdir -p ${target_dir}/realworld_deploy"
+    local ssh_cmd=$(build_ssh_cmd "$SERVER_HOST" "$SERVER_USER" "$SERVER_PORT" "$SERVER_PASSWORD")
+    eval "$ssh_cmd \"mkdir -p ${target_dir}/realworld_deploy\""
     
     # 构建排除参数
     local exclude_args=$(build_exclude_args)
@@ -185,11 +178,8 @@ sync_to_server() {
         echo -e "${YELLOW}(预览模式 - 不会实际传输文件)${NC}"
     fi
     
-    local ssh_opt="-e \"ssh -p ${SERVER_PORT}"
-    if [ -n "$SERVER_SSH_KEY" ] && [ -f "$SERVER_SSH_KEY" ]; then
-        ssh_opt="$ssh_opt -i ${SERVER_SSH_KEY}"
-    fi
-    ssh_opt="$ssh_opt\""
+    local ssh_cmd="ssh -p ${SERVER_PORT}"
+    local ssh_opt="-e \"$ssh_cmd\""
     
     eval $rsync_base $ssh_opt $exclude_args \
         "${REALWORLD_DEPLOY_DIR}/" \
@@ -199,7 +189,7 @@ sync_to_server() {
     echo -e "${GREEN}✓ 服务器代码同步完成！${NC}"
     echo ""
     echo "启动推理服务器:"
-    echo "  ssh -i ${SERVER_SSH_KEY} ${SERVER_USER}@${SERVER_HOST}"
+    echo "  ssh -p ${SERVER_PORT} ${SERVER_USER}@${SERVER_HOST}"
     echo "  cd ${target_dir}"
     echo "  python realworld_deploy/server/dp_inference_server_ssh.py"
 }

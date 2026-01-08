@@ -6,18 +6,26 @@
 
 ### 1. 配置目标地址
 
-编辑 `sync_config.sh`，设置你的目标地址：
+编辑 `sync_config.sh`，设置你的目标地址和密码：
 
 ```bash
 # 真机主机配置
 ROBOT_HOST="192.168.1.100"       # 修改为你的真机主机地址
 ROBOT_USER="user"                 # 修改为你的用户名
+ROBOT_PORT=22                     # SSH 端口
+ROBOT_PASSWORD="your_password"    # SSH 密码（留空将提示输入）
 ROBOT_TARGET_DIR="/home/user/robot_inference"  # 修改为目标目录
 
 # 推理服务器配置（如需修改）
 SERVER_HOST="115.190.134.186"
 SERVER_USER="jikangye"
+SERVER_PORT=22
+SERVER_PASSWORD="your_password"   # SSH 密码（留空将提示输入）
 ```
+
+**注意**: 
+- 如果配置了密码，建议安装 `sshpass` 以实现自动登录：`sudo apt-get install sshpass` (Ubuntu/Debian)
+- 如果未配置密码或未安装 `sshpass`，脚本会提示你手动输入密码
 
 ### 2. 添加执行权限
 
@@ -92,14 +100,14 @@ chmod +x sync.sh sync_config.sh
 ROBOT_HOST="IP地址"
 ROBOT_USER="用户名"
 ROBOT_PORT=22
-ROBOT_SSH_KEY=""                  # 留空使用默认密钥
+ROBOT_PASSWORD=""                 # SSH 密码（留空将提示输入）
 ROBOT_TARGET_DIR="目标目录"
 
 # 推理服务器
 SERVER_HOST="IP地址"
 SERVER_USER="用户名"
 SERVER_PORT=22
-SERVER_SSH_KEY="密钥路径"
+SERVER_PASSWORD=""                # SSH 密码（留空将提示输入）
 SERVER_TARGET_DIR="目标目录"
 ```
 
@@ -133,8 +141,9 @@ SERVER_TARGET_DIR="目标目录"
 ### SSH 连接失败
 
 1. 检查 IP 地址和端口是否正确
-2. 检查 SSH 密钥权限：`chmod 600 keys/id_server`
+2. 检查密码是否正确（如果使用密码登录）
 3. 检查网络连接
+4. 如果使用 `sshpass`，确保已安装：`sudo apt-get install sshpass`
 
 ### 权限不足
 

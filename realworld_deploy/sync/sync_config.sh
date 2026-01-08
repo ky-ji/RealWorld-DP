@@ -12,20 +12,20 @@ REALWORLD_DEPLOY_DIR="$(cd "${SYNC_SCRIPT_DIR}/.." && pwd)"
 
 # ==================== 真机主机配置 ====================
 # 连接真机主机的配置
-ROBOT_HOST="192.168.1.100"       # 真机主机地址（请修改为你的地址）
-ROBOT_USER="user"                 # SSH 用户名
+ROBOT_HOST="192.168.3.40"       # 真机主机地址（请修改为你的地址）
+ROBOT_USER="yxlab"                 # SSH 用户名
 ROBOT_PORT=22                     # SSH 端口
-ROBOT_SSH_KEY=""                  # SSH 私钥路径（留空使用默认密钥）
+ROBOT_PASSWORD=""                 # SSH 密码（留空将提示输入）
 
 # 真机主机上的目标路径
-ROBOT_TARGET_DIR="/home/user/robot_inference"  # 请修改为你想要的路径
+ROBOT_TARGET_DIR="/home/yxlab/code/jikangye/robot_inference"  # 请修改为你想要的路径
 
 # ==================== 推理服务器配置 ====================
 # 连接推理服务器的配置
 SERVER_HOST="115.190.134.186"    # 服务器地址
 SERVER_USER="jikangye"           # SSH 用户名
 SERVER_PORT=22                   # SSH 端口
-SERVER_SSH_KEY="${REALWORLD_DEPLOY_DIR}/robot_inference/keys/id_server"
+SERVER_PASSWORD=""               # SSH 密码（留空将提示输入）
 
 # 服务器上的目标路径
 SERVER_TARGET_DIR="/home/jikangye/workspace/baselines/vla-baselines/RealWorld-DP"
@@ -68,16 +68,26 @@ show_config() {
     echo "真机主机配置:"
     echo "  主机: ${ROBOT_USER}@${ROBOT_HOST}:${ROBOT_PORT}"
     echo "  目标目录: ${ROBOT_TARGET_DIR}"
+    if [ -n "$ROBOT_PASSWORD" ]; then
+        echo "  认证方式: 密码（已配置）"
+    else
+        echo "  认证方式: 密码（交互式输入）"
+    fi
     echo ""
     echo "推理服务器配置:"
     echo "  主机: ${SERVER_USER}@${SERVER_HOST}:${SERVER_PORT}"
     echo "  目标目录: ${SERVER_TARGET_DIR}"
+    if [ -n "$SERVER_PASSWORD" ]; then
+        echo "  认证方式: 密码（已配置）"
+    else
+        echo "  认证方式: 密码（交互式输入）"
+    fi
     echo "========================================"
 }
 
 # 导出变量
 export SYNC_SCRIPT_DIR
 export REALWORLD_DEPLOY_DIR
-export ROBOT_HOST ROBOT_USER ROBOT_PORT ROBOT_SSH_KEY ROBOT_TARGET_DIR
-export SERVER_HOST SERVER_USER SERVER_PORT SERVER_SSH_KEY SERVER_TARGET_DIR
+export ROBOT_HOST ROBOT_USER ROBOT_PORT ROBOT_PASSWORD ROBOT_TARGET_DIR
+export SERVER_HOST SERVER_USER SERVER_PORT SERVER_PASSWORD SERVER_TARGET_DIR
 
