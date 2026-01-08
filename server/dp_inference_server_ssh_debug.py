@@ -29,7 +29,9 @@ from diffusion_policy.real_world.real_inference_util import get_real_obs_dict
 from server_config import (
     SERVER_IP, SERVER_PORT, CHECKPOINT_PATH, USE_EMA,
     DEVICE, SCHEDULER_TYPE, NUM_INFERENCE_STEPS, INFERENCE_FREQ,
-    SOCKET_TIMEOUT, BUFFER_SIZE, ENCODING, MAX_CLIENTS, VERBOSE
+    SOCKET_TIMEOUT, BUFFER_SIZE, ENCODING, MAX_CLIENTS, VERBOSE,
+    ACTION_SCALE, ACTION_SMOOTHING_ALPHA, MAX_DELTA_POSITION, 
+    MAX_DELTA_ROTATION, ENABLE_ACTION_LIMIT
 )
 
 class DPInferenceServerSSH:
@@ -68,7 +70,15 @@ class DPInferenceServerSSH:
         self.episode_start_time = None  # 服务器端episode开始时间（绝对时间）
         self.first_client_timestamp = None  # 第一个客户端时间戳（相对时间）
         self.last_recv_timestamp = None  # 上一次接收消息的时间（用于计算消息间隔）
-        self.last_recv_timestamp = None  # 上一次接收消息的时间（用于计算消息间隔）
+        
+        # 动作限制和平滑
+        self.action_scale = ACTION_SCALE
+        self.smoothing_alpha = ACTION_SMOOTHING_ALPHA
+        self.max_delta_position = MAX_DELTA_POSITION
+        self.max_delta_rotation = MAX_DELTA_ROTATION
+        self.enable_action_limit = ENABLE_ACTION_LIMIT
+        self.prev_action = None  # 上一次输出的动作（用于平滑）
+        self.current_state = None  # 当前机械臂状态（用于增量限制）
         
         # 轨迹记录
         self.inference_log = {
@@ -181,6 +191,81 @@ class DPInferenceServerSSH:
             print(f"[推理服务器] ✗ 模型预热失败: {e}")
             raise
 
+    def _limit_and_smooth_action(self, action: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+        """
+        对输出动作进行限制和平滑处理
+        
+        Args:
+            action: 原始动作序列 (n_action_steps, action_dim)
+            current_state: 当前机械臂状态 (pose + gripper)
+        
+        Returns:
+            处理后的动作序列
+        """
+        if not self.enable_action_limit:
+            return action
+        
+        action = action.copy()
+        n_steps, action_dim = action.shape
+        
+        # 1. 应用动作缩放（相对于当前状态的增量）
+        if self.action_scale < 1.0 and current_state is not None:
+            # 对每个动作步骤，计算与当前状态的增量并缩放
+            for i in range(n_steps):
+                # 假设前6维是pose（xyz + rotation），第7维是gripper
+                pose_dim = min(6, action_dim - 1) if action_dim >= 7 else action_dim
+                
+                # 计算pose部分的增量
+                delta = action[i, :pose_dim] - current_state[:pose_dim]
+                # 缩放增量
+                scaled_delta = delta * self.action_scale
+                # 应用缩放后的增量
+                action[i, :pose_dim] = current_state[:pose_dim] + scaled_delta
+        
+        # 2. 限制位置和旋转的最大变化量
+        if current_state is not None:
+            for i in range(n_steps):
+                # 使用上一步动作或当前状态作为参考
+                if i == 0:
+                    ref_state = current_state
+                else:
+                    ref_state = action[i - 1]
+                
+                # 限制位置变化 (假设前3维是xyz)
+                if action_dim >= 3:
+                    pos_delta = action[i, :3] - ref_state[:3]
+                    pos_delta_norm = np.linalg.norm(pos_delta)
+                    if pos_delta_norm > self.max_delta_position:
+                        pos_delta = pos_delta * (self.max_delta_position / pos_delta_norm)
+                        action[i, :3] = ref_state[:3] + pos_delta
+                
+                # 限制旋转变化 (假设3:6维是旋转)
+                if action_dim >= 6:
+                    rot_delta = action[i, 3:6] - ref_state[3:6]
+                    rot_delta_norm = np.linalg.norm(rot_delta)
+                    if rot_delta_norm > self.max_delta_rotation:
+                        rot_delta = rot_delta * (self.max_delta_rotation / rot_delta_norm)
+                        action[i, 3:6] = ref_state[3:6] + rot_delta
+        
+        # 3. 与上一次输出动作做指数移动平均平滑
+        if self.smoothing_alpha > 0 and self.prev_action is not None:
+            # 使用上一次输出动作的第一个动作作为平滑参考
+            prev_first_action = self.prev_action[0] if len(self.prev_action.shape) > 1 else self.prev_action
+            
+            # 对第一个动作步骤应用平滑
+            action[0] = self.smoothing_alpha * prev_first_action + (1 - self.smoothing_alpha) * action[0]
+            
+            # 可选：对后续步骤也应用逐渐减弱的平滑
+            for i in range(1, min(n_steps, 3)):  # 只平滑前3步
+                decay = self.smoothing_alpha * (0.5 ** i)  # 指数衰减
+                if i < len(self.prev_action):
+                    action[i] = decay * self.prev_action[i] + (1 - decay) * action[i]
+        
+        # 更新记录
+        self.prev_action = action.copy()
+        
+        return action
+
     def start(self):
         """启动服务器"""
         try:
@@ -245,6 +330,9 @@ class DPInferenceServerSSH:
                 self.episode_start_time = time.time()
                 self.first_client_timestamp = None  # 重置，等待第一个observation
                 self.last_recv_timestamp = None  # 重置接收时间记录
+                # 重置动作平滑相关变量
+                self.prev_action = None
+                self.current_state = None
                 response = {'type': 'reset_ack'}
                 client_socket.sendall((json.dumps(response) + '\n').encode(ENCODING))
                 
@@ -392,6 +480,20 @@ class DPInferenceServerSSH:
                 action_with_gripper = np.concatenate([action, gripper_actions], axis=-1)
             else:
                 action_with_gripper = action
+            
+            # --- 动作限制和平滑 ---
+            # 获取当前状态（pose + gripper）
+            current_state = np.concatenate([
+                env_obs[self.obs_keys['lowdim'][0]][-1],  # pose
+                env_obs[self.obs_keys['lowdim'][-1]][-1]  # gripper
+            ]) if len(self.obs_keys['lowdim']) > 0 else None
+            
+            # 应用动作限制和平滑
+            action_with_gripper = self._limit_and_smooth_action(action_with_gripper, current_state)
+            
+            if self.verbose and self.enable_action_limit:
+                print(f"[动作限制] scale={self.action_scale:.2f}, smooth={self.smoothing_alpha:.2f}, "
+                      f"max_pos={self.max_delta_position:.3f}, max_rot={self.max_delta_rotation:.3f}")
 
             # --- 保存日志 (含图片和时间戳) ---
             # 为了避免日志过大，我们将图片重新编码为 JPEG Base64

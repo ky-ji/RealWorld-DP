@@ -39,6 +39,14 @@ BUFFER_SIZE = 4096                 # 缓冲区大小
 ENCODING = 'utf-8'                 # 编码格式
 MAX_CLIENTS = 1                    # 最大客户端连接数
 
+# 动作限制配置
+ACTION_SCALE = 0.8                # 动作缩放系数 (0.0-1.0)，1.0表示不缩放
+ACTION_SMOOTHING_ALPHA = 0.15       # 动作平滑系数 (0.0-1.0)，0.0表示完全使用新动作，1.0表示完全保持旧动作
+                                   # 平滑公式: action = alpha * prev_action + (1 - alpha) * new_action
+MAX_DELTA_POSITION = 0.04          # 位置最大变化量 (米/步)，限制xyz的变化速度
+MAX_DELTA_ROTATION = 0.1           # 旋转最大变化量 (弧度/步)，限制旋转的变化速度
+ENABLE_ACTION_LIMIT = True         # 是否启用动作限制
+
 # 日志配置
 VERBOSE = True                     # 是否打印详细日志
 LOG_LEVEL = 'INFO'                 # 日志级别: DEBUG, INFO, WARNING, ERROR
