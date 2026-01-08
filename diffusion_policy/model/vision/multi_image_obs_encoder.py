@@ -1,9 +1,10 @@
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Optional
 import copy
 import torch
 import torch.nn as nn
 import torchvision
 from diffusion_policy.model.vision.crop_randomizer import CropRandomizer
+from diffusion_policy.model.vision.color_jitter_randomizer import ColorJitterRandomizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 
@@ -15,6 +16,8 @@ class MultiImageObsEncoder(ModuleAttrMixin):
             resize_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
             crop_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
             random_crop: bool=True,
+            # color jitter augmentation
+            color_jitter: Optional[Union[dict, bool]]=None,
             # replace BatchNorm with GroupNorm
             use_group_norm: bool=False,
             # use single rgb model for all rgb inputs
@@ -82,7 +85,7 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                     )
                     input_shape = (shape[0],h,w)
 
-                # configure randomizer
+                # configure randomizer (crop)
                 this_randomizer = nn.Identity()
                 if crop_shape is not None:
                     if isinstance(crop_shape, dict):
@@ -98,16 +101,36 @@ class MultiImageObsEncoder(ModuleAttrMixin):
                             pos_enc=False
                         )
                     else:
-                        this_normalizer = torchvision.transforms.CenterCrop(
+                        this_randomizer = torchvision.transforms.CenterCrop(
                             size=(h,w)
                         )
+                
+                # configure color jitter
+                this_color_jitter = nn.Identity()
+                if color_jitter is not None:
+                    if isinstance(color_jitter, bool) and color_jitter:
+                        # Use default parameters
+                        this_color_jitter = ColorJitterRandomizer()
+                    elif isinstance(color_jitter, dict):
+                        # Use custom parameters
+                        this_color_jitter = ColorJitterRandomizer(**color_jitter)
+                    elif isinstance(color_jitter, ColorJitterRandomizer):
+                        # Already a ColorJitterRandomizer instance
+                        this_color_jitter = color_jitter
+                
                 # configure normalizer
                 this_normalizer = nn.Identity()
                 if imagenet_norm:
                     this_normalizer = torchvision.transforms.Normalize(
                         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
                 
-                this_transform = nn.Sequential(this_resizer, this_randomizer, this_normalizer)
+                # Transform pipeline: resize -> crop -> color_jitter -> normalize
+                this_transform = nn.Sequential(
+                    this_resizer, 
+                    this_randomizer, 
+                    this_color_jitter,
+                    this_normalizer
+                )
                 key_transform_map[key] = this_transform
             elif type == 'low_dim':
                 low_dim_keys.append(key)

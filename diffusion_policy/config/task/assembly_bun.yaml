@@ -1,9 +1,9 @@
-name: assembly_chocolate
+name: assembly_bun
 
 # CogAct CLEAN dataset (starting from episode 66)
 # Image resolution: 320x180 (resized from 1920x1080, optimized for training)
 image_shape: [3, 180, 320]
-dataset_path: /data0/processed/assembly_chocolate/20260104_no_depth_320_180_8d.zarr
+dataset_path: /data0/processed/assembly_bun/20260104_no_depth_320_180_8d.zarr
 
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim

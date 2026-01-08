@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
@@ -16,6 +17,7 @@ from robomimic.algo.algo import PolicyAlgo
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
+from diffusion_policy.model.vision.color_jitter_randomizer import ColorJitterRandomizer
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 
 
@@ -32,6 +34,7 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             crop_shape=(76, 76),
             obs_encoder_group_norm=False,
             eval_fixed_crop=False,
+            color_jitter=None,  # Color jitter augmentation: None, bool, or dict with parameters
             # arch
             n_layer=8,
             n_cond_layers=0,
@@ -46,6 +49,16 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             # parameters passed to step
             **kwargs):
         super().__init__()
+
+        # Extract and remove color_jitter from kwargs to prevent it from being passed to scheduler.step()
+        # Handle both dict format and Hydra-expanded individual parameters
+        color_jitter = kwargs.pop('color_jitter', None)
+        if color_jitter is None:
+            # Check if Hydra expanded the dict into individual kwargs
+            cj_keys = ['brightness', 'contrast', 'saturation', 'hue', 'p']
+            if any(k in kwargs for k in cj_keys):
+                color_jitter = {k: kwargs.pop(k) for k in cj_keys if k in kwargs}
+                color_jitter = color_jitter if color_jitter else None
 
         # parse shape_meta
         action_shape = shape_meta['action']['shape']
@@ -132,6 +145,38 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
                     pos_enc=x.pos_enc
                 )
             )
+        
+        # Add color jitter augmentation if specified
+        # Insert color_jitter into Sequential modules after crop operations
+        if color_jitter is not None:
+            # Create color jitter module
+            if isinstance(color_jitter, bool) and color_jitter:
+                cj_module = ColorJitterRandomizer()
+            elif isinstance(color_jitter, dict):
+                cj_module = ColorJitterRandomizer(**color_jitter)
+            else:
+                cj_module = color_jitter
+            
+            # Find Sequential modules and insert color_jitter after crop operations
+            def insert_color_jitter(net):
+                if isinstance(net, nn.Sequential):
+                    new_modules = []
+                    for module in net:
+                        new_modules.append(module)
+                        # Insert color_jitter after crop randomizers
+                        if isinstance(module, (rmbn.CropRandomizer, dmvc.CropRandomizer, 
+                                             torchvision.transforms.CenterCrop)):
+                            new_modules.append(cj_module)
+                    return nn.Sequential(*new_modules)
+                elif isinstance(net, nn.ModuleDict):
+                    for key in net:
+                        net[key] = insert_color_jitter(net[key])
+                elif isinstance(net, nn.ModuleList):
+                    for i in range(len(net)):
+                        net[i] = insert_color_jitter(net[i])
+                return net
+            
+            obs_encoder = insert_color_jitter(obs_encoder)
 
         # create diffusion model
         obs_feature_dim = obs_encoder.output_shape()[0]
