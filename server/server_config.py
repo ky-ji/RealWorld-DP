@@ -16,14 +16,14 @@ SERVER_PORT = 8007               # 推理服务器端口
 # 示例路径 (请根据实际训练输出更新):
 # - train_cogact.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d/checkpoints/
 # - train_cogact_clean.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d_clean/checkpoints/
-CHECKPOINT_PATH = "/home/jikangye/workspace/baselines/vla-baselines/RealWorld-DP/data/outputs/2026.01.07/00.07.15_train_diffusion_transformer_hybrid_ddp_assembly_bun/checkpoints/epoch=0550-train_loss=0.072.ckpt"
+CHECKPOINT_PATH = "/home/jikangye/workspace/baselines/vla-baselines/RealWorld-DP/data/outputs/2026.01.07/14.13.48_train_diffusion_transformer_hybrid_ddp_assembly_chocolate/checkpoints/epoch=0550-train_loss=0.057.ckpt"
 USE_EMA = True                     # 是否使用 EMA 模型
 
 # 推理配置
 DEVICE = "cuda:0"                  # 推理设备 (cuda:0, cuda:1, cuda:2, cuda:3 或 cpu)
                                    # GPU 0 被训练占用，使用 GPU 1
 SCHEDULER_TYPE = "DDIM"            # Scheduler 类型: "DDIM" 或 "DDPM"
-NUM_INFERENCE_STEPS = 30          # 推理步数（降低步数可加快推理速度）
+NUM_INFERENCE_STEPS = 50          # 推理步数（降低步数可加快推理速度）
                                    # DDIM: 通常 10-50 步即可
                                    # DDPM: 通常需要 50-100 步
 INFERENCE_FREQ = 10.0              # 推理频率 (Hz)
