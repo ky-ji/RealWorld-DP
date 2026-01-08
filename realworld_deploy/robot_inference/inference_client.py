@@ -19,6 +19,9 @@ from typing import Optional, Tuple, Dict
 from threading import Thread, Lock, Event
 from collections import deque
 
+# 设置路径（使代码可在任意目录运行）
+import _path_setup
+
 try:
     from polymetis import RobotInterface, GripperInterface
     print("✓ Polymetis 库导入成功")
@@ -29,7 +32,7 @@ except ImportError as e:
 
 from cameras import create_camera
 from inference_config_vol import (
-    SSH_HOST, SSH_USER, SSH_KEY, SSH_PORT,
+    SSH_HOST, SSH_USER, SSH_PORT,
     SERVER_PORT, LOCAL_PORT,
     ROBOT_IP, ROBOT_PORT, GRIPPER_PORT,
     CAMERA_TYPE, CAMERA_INDEX, CAMERA_SERIAL_NUMBER, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
@@ -38,6 +41,9 @@ from inference_config_vol import (
     GRIPPER_OPEN_WIDTH, GRIPPER_CLOSED_WIDTH, GRIPPER_SPEED, GRIPPER_FORCE,
     CARTESIAN_KX, CARTESIAN_KXD
 )
+
+# 使用动态路径获取 SSH 密钥
+SSH_KEY = _path_setup.get_ssh_key_path('id_server')
 
 
 class ObservationBuffer:
@@ -718,7 +724,10 @@ class PolymetisInferenceClientSSH:
             
             serializable_log = convert_to_serializable(self.trajectory_log)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_file = f"trajectory_log_{timestamp}.json"
+            
+            # 保存到 log 目录
+            log_dir = _path_setup.get_log_dir()
+            log_file = log_dir / f"trajectory_log_{timestamp}.json"
             
             with open(log_file, 'w') as f:
                 json.dump(serializable_log, f, indent=2)

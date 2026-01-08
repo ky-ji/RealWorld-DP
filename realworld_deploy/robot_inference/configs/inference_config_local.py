@@ -1,18 +1,12 @@
 """
-推理配置文件
-包含 SSH 隧道、机器人、摄像头等配置参数
+本地推理配置文件
+用于本地直接通信（无需SSH隧道）
 """
 
-# ==================== SSH 隧道配置 ====================
-# SSH 服务器配置
-SSH_HOST = "115.190.134.186"  # SSH 服务器地址
-SSH_USER = "jikangye"            # SSH 用户名
-SSH_KEY = 'realworld_deploy/inference/keys/id_server'  # SSH 私钥路径（相对路径或绝对路径）
-SSH_PORT = 22           # SSH 端口
-
-# 推理服务器配置
-SERVER_PORT = 8007         # 远程推理服务器端口（远程服务器上推理服务监听的端口）
-LOCAL_PORT = 8007          # 本地转发端口
+# ==================== 本地服务器配置 ====================
+# 推理服务器配置（本地直接连接）
+SERVER_IP = "127.0.0.1"      # 本地服务器地址
+SERVER_PORT = 8008           # 本地服务器端口
 
 # ==================== 机器人配置 ====================
 # Polymetis 服务器配置
@@ -35,7 +29,6 @@ CARTESIAN_KXD = [40, 40, 40, 3, 3, 3]         # 笛卡尔阻尼
 # ==================== 摄像头配置 ====================
 CAMERA_TYPE = 'realsense'    # 相机类型: 'realsense' 或 'usb'
 CAMERA_INDEX = 0             # 摄像头索引（仅 USB 相机使用）
-CAMERA_SERIAL_NUMBER = '944622073019'  # RealSense 相机序列号（用于多相机场景，对应 front_view）
 CAMERA_RESOLUTION = (1280, 720)  # 摄像头分辨率 (width, height)
 IMAGE_QUALITY = 80           # JPEG 压缩质量 (1-100)
 ENABLE_DEPTH = True          # 是否启用深度（仅 RealSense 相机）
@@ -44,14 +37,14 @@ ENABLE_DEPTH = True          # 是否启用深度（仅 RealSense 相机）
 INFERENCE_FREQ = 10.0        # 推理频率 (Hz)
 N_OBS_STEPS = 2              # 观测步数（历史帧数）
 CAMERA_FREQ = 30.0           # 摄像头采样频率 (Hz)
-STEPS_PER_INFERENCE = 6    # 每次推理执行的动作数量（1 = 最实时，6 = 官方默认值）
+STEPS_PER_INFERENCE = 6      # 每次推理执行的动作数量（1 = 最实时，6 = 官方默认值）
 
 # ==================== 动作执行配置 ====================
 # 动作缩放因子 (0.0-1.0)
 # - 1.0: 完全执行模型输出的动作（最快，需要模型准确）
 # - 0.5: 执行50%的动作幅度（较安全）
 # - 0.2: 执行20%的动作幅度（最安全，适合测试）
-ACTION_SCALE = 1
+ACTION_SCALE = 1.0
 
 # 夹爪参数（注意：代码中已硬编码正确参数，这些配置暂不使用）
 GRIPPER_OPEN_WIDTH = 0.09    # 夹爪打开宽度 (m) - 使用 goto()
@@ -66,4 +59,4 @@ ENCODING = 'utf-8'           # 字符编码
 
 # ==================== 日志配置 ====================
 SAVE_TRAJECTORY_LOG = True   # 是否保存轨迹日志
-LOG_DIR = "logs"             # 日志保存目录
+LOG_DIR = "log"              # 日志保存目录（相对于 robot_inference 目录）
