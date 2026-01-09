@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Polymetis 推理客户端（SSH 隧道版本）
-通过 SSH 隧道传递实时控制数据
+Polymetis 推理客户端（统一版本）
+支持本地直连和 SSH 隧道两种模式
 """
 
 import socket
@@ -13,6 +13,7 @@ import base64
 import threading
 import math
 import subprocess
+import argparse
 import torch
 from pathlib import Path
 from typing import Optional, Tuple, Dict
@@ -31,19 +32,6 @@ except ImportError as e:
     sys.exit(1)
 
 from cameras import create_camera
-from inference_config_vol import (
-    SSH_HOST, SSH_USER, SSH_PORT,
-    SERVER_PORT, LOCAL_PORT,
-    ROBOT_IP, ROBOT_PORT, GRIPPER_PORT,
-    CAMERA_TYPE, CAMERA_INDEX, CAMERA_SERIAL_NUMBER, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
-    INFERENCE_FREQ, N_OBS_STEPS, CAMERA_FREQ,
-    ACTION_SCALE, STEPS_PER_INFERENCE,
-    GRIPPER_OPEN_WIDTH, GRIPPER_CLOSED_WIDTH, GRIPPER_SPEED, GRIPPER_FORCE,
-    CARTESIAN_KX, CARTESIAN_KXD
-)
-
-# 使用动态路径获取 SSH 密钥
-SSH_KEY = _path_setup.get_ssh_key_path('id_server')
 
 
 class ObservationBuffer:
@@ -139,19 +127,84 @@ class DPFormatConverter:
         gripper_value = float(gripper_1d[0]) if isinstance(gripper_1d, np.ndarray) else float(gripper_1d)
         gripper_open = gripper_value > DPFormatConverter.GRIPPER_THRESHOLD
         return ee_pos.astype(np.float32), ee_quat.astype(np.float32), gripper_open
+
+
+class LocalSocketClient:
+    """本地 Socket 客户端（直接连接，无需SSH隧道）"""
     
+    def __init__(self, server_ip: str, server_port: int, buffer_size: int = 4096, encoding: str = 'utf-8'):
+        self.server_ip = server_ip
+        self.server_port = server_port
+        self.buffer_size = buffer_size
+        self.encoding = encoding
+        self.socket = None
+    
+    def connect(self, timeout: float = 5.0) -> bool:
+        """连接到服务器"""
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(timeout)
+            self.socket.connect((self.server_ip, self.server_port))
+            print(f"[本地连接] ✓ 已连接到 {self.server_ip}:{self.server_port}")
+            return True
+        except Exception as e:
+            print(f"[本地连接] ✗ 连接失败: {e}")
+            return False
+    
+    def send_data(self, data: Dict) -> bool:
+        """发送数据"""
+        try:
+            msg = json.dumps(data) + '\n'
+            self.socket.sendall(msg.encode(self.encoding))
+            return True
+        except Exception as e:
+            print(f"[本地连接] 发送错误: {e}")
+            return False
+    
+    def recv_data(self, timeout: float = 5.0) -> Optional[Dict]:
+        """接收数据"""
+        try:
+            self.socket.settimeout(timeout)
+            data = b''
+            while True:
+                chunk = self.socket.recv(self.buffer_size)
+                if not chunk:
+                    return None
+                data += chunk
+                if b'\n' in data:
+                    break
+            msg = data.decode(self.encoding).strip()
+            return json.loads(msg)
+        except socket.timeout:
+            return None
+        except Exception as e:
+            print(f"[本地连接] 接收错误: {e}")
+            return None
+    
+    def close(self):
+        """关闭连接"""
+        if self.socket:
+            self.socket.close()
+            print(f"[本地连接] ✓ 连接已关闭")
+    
+    def stop_tunnel(self):
+        """兼容接口（本地模式无需隧道）"""
+        pass
+
 
 class SSHTunnelClient:
     """SSH 隧道客户端"""
     
     def __init__(self, ssh_host: str, ssh_user: str, ssh_key: str, ssh_port: int, 
-                 remote_port: int, local_port: int = 7):
+                 remote_port: int, local_port: int = 8007, buffer_size: int = 4096, encoding: str = 'utf-8'):
         self.ssh_host = ssh_host
         self.ssh_user = ssh_user
         self.ssh_key = ssh_key
         self.ssh_port = ssh_port
         self.remote_port = remote_port
         self.local_port = local_port
+        self.buffer_size = buffer_size
+        self.encoding = encoding
         self.tunnel_process = None
         self.socket = None
         
@@ -190,7 +243,7 @@ class SSHTunnelClient:
     def send_data(self, data: Dict) -> bool:
         try:
             msg = json.dumps(data) + '\n'
-            self.socket.sendall(msg.encode('utf-8'))
+            self.socket.sendall(msg.encode(self.encoding))
             return True
         except Exception as e:
             print(f"[SSH隧道] 发送错误: {e}")
@@ -201,13 +254,13 @@ class SSHTunnelClient:
             self.socket.settimeout(timeout)
             data = b''
             while True:
-                chunk = self.socket.recv(4096)
+                chunk = self.socket.recv(self.buffer_size)
                 if not chunk:
                     return None
                 data += chunk
                 if b'\n' in data:
                     break
-            msg = data.decode('utf-8').strip()
+            msg = data.decode(self.encoding).strip()
             return json.loads(msg)
         except socket.timeout:
             return None
@@ -220,50 +273,132 @@ class SSHTunnelClient:
             self.socket.close()
 
 
-class PolymetisInferenceClientSSH:
-    """Polymetis 推理客户端"""
+class PolymetisInferenceClient:
+    """Polymetis 推理客户端（统一版本）"""
     
-    def __init__(self, ssh_host: str = SSH_HOST, ssh_user: str = SSH_USER,
-                 ssh_key: str = SSH_KEY, ssh_port: int = SSH_PORT,
-                 server_port: int = SERVER_PORT, robot_ip: str = ROBOT_IP,
-                 robot_port: int = ROBOT_PORT, gripper_port: int = GRIPPER_PORT,
-                 camera_type: str = CAMERA_TYPE, camera_index: int = CAMERA_INDEX,
-                 camera_serial_number: Optional[str] = CAMERA_SERIAL_NUMBER,
-                 camera_resolution: Tuple[int, int] = CAMERA_RESOLUTION,
-                 inference_freq: float = INFERENCE_FREQ, n_obs_steps: int = N_OBS_STEPS,
-                 camera_freq: float = CAMERA_FREQ, image_quality: int = IMAGE_QUALITY,
-                 enable_depth: bool = ENABLE_DEPTH):
+    def __init__(self, mode: str = 'local', config_module=None):
+        """
+        初始化客户端
         
-        self.ssh_tunnel = SSHTunnelClient(ssh_host, ssh_user, ssh_key, ssh_port, server_port, 8007)
-        self.robot_ip = robot_ip
-        self.robot_port = robot_port
-        self.gripper_port = gripper_port
+        Args:
+            mode: 连接模式 ('local' 或 'ssh')
+            config_module: 配置模块（如果为 None，根据 mode 自动加载）
+        """
+        self.mode = mode
+        
+        # 加载配置
+        if config_module is None:
+            if mode == 'local':
+                from inference_config_local import (
+                    SERVER_IP, SERVER_PORT,
+                    ROBOT_IP, ROBOT_PORT, GRIPPER_PORT,
+                    CAMERA_TYPE, CAMERA_INDEX, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
+                    INFERENCE_FREQ, N_OBS_STEPS, CAMERA_FREQ,
+                    ACTION_SCALE, STEPS_PER_INFERENCE,
+                    CARTESIAN_KX, CARTESIAN_KXD,
+                    SOCKET_TIMEOUT, BUFFER_SIZE, ENCODING
+                )
+                self.config = {
+                    'server_ip': SERVER_IP, 'server_port': SERVER_PORT,
+                    'robot_ip': ROBOT_IP, 'robot_port': ROBOT_PORT, 'gripper_port': GRIPPER_PORT,
+                    'camera_type': CAMERA_TYPE, 'camera_index': CAMERA_INDEX,
+                    'camera_serial_number': None,
+                    'camera_resolution': CAMERA_RESOLUTION, 'image_quality': IMAGE_QUALITY,
+                    'enable_depth': ENABLE_DEPTH,
+                    'inference_freq': INFERENCE_FREQ, 'n_obs_steps': N_OBS_STEPS,
+                    'camera_freq': CAMERA_FREQ,
+                    'action_scale': ACTION_SCALE, 'steps_per_inference': STEPS_PER_INFERENCE,
+                    'cartesian_kx': CARTESIAN_KX, 'cartesian_kxd': CARTESIAN_KXD,
+                    'socket_timeout': SOCKET_TIMEOUT, 'buffer_size': BUFFER_SIZE, 'encoding': ENCODING
+                }
+            else:  # ssh mode
+                from inference_config_vol import (
+                    SSH_HOST, SSH_USER, SSH_PORT,
+                    SERVER_PORT, LOCAL_PORT,
+                    ROBOT_IP, ROBOT_PORT, GRIPPER_PORT,
+                    CAMERA_TYPE, CAMERA_INDEX, CAMERA_SERIAL_NUMBER, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
+                    INFERENCE_FREQ, N_OBS_STEPS, CAMERA_FREQ,
+                    ACTION_SCALE, STEPS_PER_INFERENCE,
+                    CARTESIAN_KX, CARTESIAN_KXD,
+                    SOCKET_TIMEOUT, BUFFER_SIZE, ENCODING
+                )
+                self.config = {
+                    'ssh_host': SSH_HOST, 'ssh_user': SSH_USER, 'ssh_port': SSH_PORT,
+                    'server_port': SERVER_PORT, 'local_port': LOCAL_PORT,
+                    'robot_ip': ROBOT_IP, 'robot_port': ROBOT_PORT, 'gripper_port': GRIPPER_PORT,
+                    'camera_type': CAMERA_TYPE, 'camera_index': CAMERA_INDEX,
+                    'camera_serial_number': CAMERA_SERIAL_NUMBER,
+                    'camera_resolution': CAMERA_RESOLUTION, 'image_quality': IMAGE_QUALITY,
+                    'enable_depth': ENABLE_DEPTH,
+                    'inference_freq': INFERENCE_FREQ, 'n_obs_steps': N_OBS_STEPS,
+                    'camera_freq': CAMERA_FREQ,
+                    'action_scale': ACTION_SCALE, 'steps_per_inference': STEPS_PER_INFERENCE,
+                    'cartesian_kx': CARTESIAN_KX, 'cartesian_kxd': CARTESIAN_KXD,
+                    'socket_timeout': SOCKET_TIMEOUT, 'buffer_size': BUFFER_SIZE, 'encoding': ENCODING
+                }
+        else:
+            self.config = config_module
+        
+        # 创建连接客户端
+        if mode == 'local':
+            self.client = LocalSocketClient(
+                server_ip=self.config['server_ip'],
+                server_port=self.config['server_port'],
+                buffer_size=self.config['buffer_size'],
+                encoding=self.config['encoding']
+            )
+        else:  # ssh mode
+            ssh_key = _path_setup.get_ssh_key_path('id_server')
+            self.client = SSHTunnelClient(
+                ssh_host=self.config['ssh_host'],
+                ssh_user=self.config['ssh_user'],
+                ssh_key=ssh_key,
+                ssh_port=self.config['ssh_port'],
+                remote_port=self.config['server_port'],
+                local_port=self.config['local_port'],
+                buffer_size=self.config['buffer_size'],
+                encoding=self.config['encoding']
+            )
+        
+        # 机器人配置
+        self.robot_ip = self.config['robot_ip']
+        self.robot_port = self.config['robot_port']
+        self.gripper_port = self.config['gripper_port']
         self.robot = None
         self.gripper = None
         
-        # 创建相机实例（使用与数据采集相同的接口）
+        # 创建相机实例
         camera_kwargs = {
-            'camera_type': camera_type,
-            'width': camera_resolution[0],
-            'height': camera_resolution[1],
-            'fps': int(camera_freq),
-            'enable_depth': enable_depth,
+            'camera_type': self.config['camera_type'],
+            'width': self.config['camera_resolution'][0],
+            'height': self.config['camera_resolution'][1],
+            'fps': int(self.config['camera_freq']),
+            'enable_depth': self.config['enable_depth'],
         }
         
         # 根据相机类型添加特定参数
-        if camera_type.lower() == 'realsense' and camera_serial_number:
-            camera_kwargs['serial_number'] = camera_serial_number
-        elif camera_type.lower() == 'usb':
-            camera_kwargs['camera_index'] = camera_index
+        if self.config['camera_type'].lower() == 'realsense' and self.config.get('camera_serial_number'):
+            camera_kwargs['serial_number'] = self.config['camera_serial_number']
+        elif self.config['camera_type'].lower() == 'usb':
+            camera_kwargs['camera_index'] = self.config['camera_index']
         
         self.camera = create_camera(**camera_kwargs)
-        self.inference_freq = inference_freq
-        self.inference_interval = 1.0 / inference_freq
-        self.n_obs_steps = n_obs_steps
-        self.camera_freq = camera_freq
-        self.image_quality = image_quality
         
-        self.obs_buffer = ObservationBuffer(n_obs_steps, inference_freq, camera_freq)
+        # 推理配置
+        self.inference_freq = self.config['inference_freq']
+        self.inference_interval = 1.0 / self.inference_freq
+        self.n_obs_steps = self.config['n_obs_steps']
+        self.camera_freq = self.config['camera_freq']
+        self.image_quality = self.config['image_quality']
+        self.action_scale = self.config['action_scale']
+        self.steps_per_inference = self.config['steps_per_inference']
+        self.cartesian_kx = self.config['cartesian_kx']
+        self.cartesian_kxd = self.config['cartesian_kxd']
+        
+        # 观测缓冲区
+        self.obs_buffer = ObservationBuffer(self.n_obs_steps, self.inference_freq, self.camera_freq)
+        
+        # 状态变量
         self.running = False
         self.data_lock = Lock()
         self.latest_action = None
@@ -272,21 +407,21 @@ class PolymetisInferenceClientSSH:
         self.actions_received = 0
         self.observations_sent = 0
         self.gripper_open = True
-        self.last_gripper_state = True  # 记录上一次夹爪状态，避免重复发送命令
+        self.last_gripper_state = True
         
         self.control_thread = None
         self.current_target_pos = None
         self.current_target_quat = None
         self.target_lock = Lock()
         
-        # 时间戳管理（用于动作过滤）
-        self.eval_t_start = None  # 评估开始时间
-        self.iter_idx = 0  # 推理迭代索引
+        # 时间戳管理
+        self.eval_t_start = None
+        self.iter_idx = 0
         
-        # 回退点过滤（用于过滤chunk中回退的动作点）
-        self.last_action_output = None  # 上一次执行的动作位置 (pos, quat)
-        self.backtrack_threshold = 0.00  # 回退点判断阈值: 50mm
-        self.filtered_backtrack_count = 0  # 被过滤的回退点数量
+        # 回退点过滤
+        self.last_action_output = None
+        self.backtrack_threshold = 0.00
+        self.filtered_backtrack_count = 0
         
         self.trajectory_log = {
             'observations': [],
@@ -295,20 +430,24 @@ class PolymetisInferenceClientSSH:
         }
 
     def run(self):
+        """运行客户端"""
+        mode_name = "本地直连" if self.mode == 'local' else "SSH 隧道"
         print("\n" + "="*70)
-        print("Polymetis 推理客户端 (SSH 隧道版本)")
+        print(f"Polymetis 推理客户端 ({mode_name}模式)")
         print("="*70)
         
         try:
-            if not self.ssh_tunnel.start_tunnel():
-                print("SSH 隧道启动失败")
-                return
+            # SSH 模式需要先启动隧道
+            if self.mode == 'ssh':
+                if not self.client.start_tunnel():
+                    print("SSH 隧道启动失败")
+                    return
+                time.sleep(2)
             
-            time.sleep(2)
-            
-            if not self.ssh_tunnel.connect():
+            if not self.client.connect():
                 print("连接服务器失败")
-                self.ssh_tunnel.stop_tunnel()
+                if self.mode == 'ssh':
+                    self.client.stop_tunnel()
                 return
             
             print("\n[客户端] 初始化机械臂...")
@@ -342,6 +481,7 @@ class PolymetisInferenceClientSSH:
             self.stop()
 
     def _initialize_robot(self):
+        """初始化机器人"""
         try:
             self.robot = RobotInterface(ip_address=self.robot_ip, port=self.robot_port)
             print(f"已连接到机器人")
@@ -354,11 +494,11 @@ class PolymetisInferenceClientSSH:
                 print(f"夹爪服务器未启动")
             
             print("启动笛卡尔阻抗控制...")
-            print(f"  刚度 Kx: {CARTESIAN_KX}")
-            print(f"  阻尼 Kxd: {CARTESIAN_KXD}")
+            print(f"  刚度 Kx: {self.cartesian_kx}")
+            print(f"  阻尼 Kxd: {self.cartesian_kxd}")
             self.robot.start_cartesian_impedance(
-                Kx=torch.Tensor(CARTESIAN_KX),
-                Kxd=torch.Tensor(CARTESIAN_KXD)
+                Kx=torch.Tensor(self.cartesian_kx),
+                Kxd=torch.Tensor(self.cartesian_kxd)
             )
             
             ee_pos, ee_quat = self.robot.get_ee_pose()
@@ -372,14 +512,7 @@ class PolymetisInferenceClientSSH:
             raise
 
     def _filter_backtracking_actions(self, action_sequence_filtered, verbose=False):
-        """
-        过滤回退的动作点，只保留沿轨迹前进的点
-        
-        策略：
-        1. 如果没有上一次的动作，全部保留
-        2. 对于每个动作，计算它与上一次执行动作的距离
-        3. 找到第一个距离递增的点（轨迹向前），从该点开始保留
-        """
+        """过滤回退的动作点，只保留沿轨迹前进的点"""
         if self.last_action_output is None or len(action_sequence_filtered) == 0:
             return action_sequence_filtered, 0
         
@@ -388,7 +521,6 @@ class PolymetisInferenceClientSSH:
         # 计算每个动作与上次执行动作的距离
         distances = []
         for single_action in action_sequence_filtered:
-            # 解析动作
             if isinstance(single_action, dict):
                 pose_7d = np.array(single_action['pose'])
             else:
@@ -400,15 +532,13 @@ class PolymetisInferenceClientSSH:
                     continue
             
             target_pos, target_quat, _ = DPFormatConverter.dp_to_polymetis_action(pose_7d, np.array([1.0]))
-            
-            # 计算位置距离
             pos_dist = np.linalg.norm(target_pos - last_pos)
             distances.append(pos_dist)
         
         if len(distances) == 0:
             return action_sequence_filtered, 0
         
-        # 找到第一个距离大于阈值的点（轨迹向前）
+        # 找到第一个距离大于阈值的点
         start_idx = 0
         min_distance_threshold = self.backtrack_threshold
         
@@ -417,7 +547,6 @@ class PolymetisInferenceClientSSH:
                 start_idx = i
                 break
         
-        # 如果所有点都太近，过滤掉所有
         if start_idx == 0 and distances[0] <= min_distance_threshold:
             if verbose:
                 print(f"[过滤] 所有动作都太接近上次位置，过滤整个chunk")
@@ -430,8 +559,9 @@ class PolymetisInferenceClientSSH:
             print(f"[过滤] 过滤掉前 {num_filtered} 个回退点，保留 {len(filtered_actions)} 个前进点")
         
         return filtered_actions, num_filtered
-    
+
     def _control_loop(self):
+        """控制循环"""
         print("[控制线程] 已启动，频率: 30 Hz")
         rate = 1.0 / 30.0
         
@@ -456,14 +586,14 @@ class PolymetisInferenceClientSSH:
                 time.sleep(0.1)
 
     def _collect_observations(self):
+        """收集观测数据"""
         print("[客户端] 观测收集线程已启动 (30Hz)")
         
         while self.running:
             try:
-                # 使用相对时间戳（从eval_t_start开始），避免浮点数精度问题
                 current_time = time.time() - (self.eval_t_start if self.eval_t_start else time.time())
                 
-                # 读取相机帧（使用与数据采集相同的接口）
+                # 读取相机帧
                 frame_data = self.camera.read_frame()
                 if frame_data['color'] is not None:
                     self.obs_buffer.add_image(frame_data['color'], current_time)
@@ -475,33 +605,47 @@ class PolymetisInferenceClientSSH:
                     pose_7d, gripper_1d = DPFormatConverter.polymetis_to_dp_state(ee_pos_np, ee_quat_np, self.gripper_open)
                     self.obs_buffer.add_state(pose_7d, gripper_1d, current_time)
                 
-                time.sleep(1.0 / 30.0)  # 33ms = 30Hz
+                time.sleep(1.0 / 30.0)
             except Exception as e:
                 if self.running:
                     print(f"[客户端] 观测收集错误: {e}")
 
     def _receive_loop(self):
+        """接收动作循环"""
         while self.running:
             try:
-                data = self.ssh_tunnel.recv_data(timeout=1.0)
-                if data and data.get('type') == 'action':
-                    action = np.array(data.get('action'), dtype=np.float32)
-                    self.trajectory_log['actions'].append({'step': self.actions_received, 'action': action.tolist()})
-                    
-                    with self.data_lock:
-                        self.latest_action = action
-                        self.actions_received += 1
-                    self.action_received.set()
+                data = self.client.recv_data(timeout=1.0)
+                if data:
+                    # 支持两种类型：'action' 和 'action_sequence'
+                    if data.get('type') == 'action':
+                        action = np.array(data.get('action'), dtype=np.float32)
+                        self.trajectory_log['actions'].append({'step': self.actions_received, 'action': action.tolist()})
+                        
+                        with self.data_lock:
+                            self.latest_action = action
+                            self.actions_received += 1
+                        self.action_received.set()
+                    elif data.get('type') == 'action_sequence':
+                        # 接收动作序列
+                        actions = np.array(data.get('actions'), dtype=np.float32)
+                        self.trajectory_log['actions'].append({'step': self.actions_received, 'actions': actions.tolist()})
+                        
+                        with self.data_lock:
+                            self.latest_action = actions
+                            self.actions_received += 1
+                        self.action_received.set()
+                        print(f"[客户端] 收到动作序列: shape={actions.shape}")
             except Exception as e:
                 if self.running:
                     print(f"[客户端] 接收错误: {e}")
 
     def _inference_loop(self):
-        dt = self.inference_interval  # 基础时间步长
-        actual_inference_interval = dt * STEPS_PER_INFERENCE  # 实际推理间隔
+        """推理循环"""
+        dt = self.inference_interval
+        actual_inference_interval = dt * self.steps_per_inference
         print(f"[客户端] 推理循环已启动")
         print(f"  基础频率: {1/dt:.1f}Hz (dt={dt:.3f}s)")
-        print(f"  实际推理频率: {1/actual_inference_interval:.1f}Hz (每次执行{STEPS_PER_INFERENCE}步)")
+        print(f"  实际推理频率: {1/actual_inference_interval:.1f}Hz (每次执行{self.steps_per_inference}步)")
         
         # 等待观测缓冲区填充
         print("[客户端] 等待观测缓冲区填充...")
@@ -511,7 +655,7 @@ class PolymetisInferenceClientSSH:
         time.sleep(start_delay)
         print("[客户端] ✓ 开始推理控制")
         
-        frame_latency = 1/30  # 摄像头延迟补偿
+        frame_latency = 1/30
         
         while self.running:
             try:
@@ -520,7 +664,7 @@ class PolymetisInferenceClientSSH:
                     time.sleep(0.01)
                     continue
                 
-                # 记录观测（拼接pose+gripper用于日志）
+                # 记录观测
                 last_pose = aligned_obs['poses'][-1]
                 last_gripper = aligned_obs['grippers'][-1]
                 self.trajectory_log['observations'].append({
@@ -535,21 +679,21 @@ class PolymetisInferenceClientSSH:
                     _, img_encoded = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, self.image_quality])
                     images_b64.append(base64.b64encode(img_encoded).decode('utf-8'))
                 
-                # 发送观测：分别发送poses和grippers
+                # 发送观测
                 obs_msg = {
                     'type': 'observation',
                     'images': images_b64,
-                    'poses': aligned_obs['poses'].astype(np.float32).tolist(),  # (n_obs_steps, 7)
-                    'grippers': aligned_obs['grippers'].astype(np.float32).tolist(),  # (n_obs_steps, 1)
+                    'poses': aligned_obs['poses'].astype(np.float32).tolist(),
+                    'grippers': aligned_obs['grippers'].astype(np.float32).tolist(),
                     'timestamps': aligned_obs['timestamps'].tolist()
                 }
                 
-                if self.ssh_tunnel.send_data(obs_msg):
+                if self.client.send_data(obs_msg):
                     self.observations_sent += 1
                     print(f"[客户端] 发送观测 #{self.observations_sent} (iter={self.iter_idx})")
                 
                 # 计算本次推理周期结束时间
-                t_cycle_end = t_start + (self.iter_idx + STEPS_PER_INFERENCE) * dt
+                t_cycle_end = t_start + (self.iter_idx + self.steps_per_inference) * dt
                 
                 if self.action_received.wait(timeout=actual_inference_interval):
                     self.action_received.clear()
@@ -563,7 +707,6 @@ class PolymetisInferenceClientSSH:
                         else:
                             action_sequence = action
                         
-                        # ========== 不再过滤过期动作，直接执行所有动作 ==========
                         # 获取观测时间戳
                         obs_timestamps = aligned_obs['timestamps']
                         
@@ -573,11 +716,11 @@ class PolymetisInferenceClientSSH:
                         action_timestamps = (np.arange(len(action_sequence), dtype=np.float64) + action_offset
                             ) * dt + obs_timestamps[-1]
                         
-                        # 直接使用所有动作，不进行过期过滤
+                        # 直接使用所有动作
                         action_sequence_filtered = action_sequence
                         action_timestamps_filtered = action_timestamps
                         
-                        # ========== 细粒度过滤：移除回退点 ==========
+                        # 过滤回退点
                         action_sequence_final, num_backtrack_filtered = self._filter_backtracking_actions(
                             action_sequence_filtered, verbose=True
                         )
@@ -589,33 +732,30 @@ class PolymetisInferenceClientSSH:
                         if len(action_sequence_final) == 0:
                             if self.filtered_backtrack_count % 10 == 0:
                                 print(f"[过滤] 已过滤 {self.filtered_backtrack_count} 个回退点")
-                            # 等待到下一个推理周期
                             wait_until = t_cycle_end - frame_latency
                             wait_time = wait_until - time.monotonic()
                             if wait_time > 0:
                                 time.sleep(wait_time)
-                            continue  # 跳过本次执行
+                            continue
                         
-                        # 更新时间戳（移除回退点后）
+                        # 更新时间戳
                         action_timestamps_final = action_timestamps_filtered[num_backtrack_filtered:]
                         
                         print(f"[客户端] 收到 {len(action_sequence)} 个动作，移除 {num_backtrack_filtered} 个回退点，执行 {len(action_sequence_final)} 个")
                         
                         # 执行过滤后的动作
                         for step_idx, single_action in enumerate(action_sequence_final):
-                            # single_action 应该是 {'pose': [7], 'gripper': [1]} 或者是两个数组
                             if isinstance(single_action, dict):
                                 pose_7d = np.array(single_action['pose'])
                                 gripper_1d = np.array(single_action['gripper'])
                             else:
-                                # 如果是数组，假设前7个pose，后1个gripper
                                 single_action = np.array(single_action).flatten()
                                 if len(single_action) == 8:
                                     pose_7d = single_action[:7]
                                     gripper_1d = single_action[7:8]
                                 elif len(single_action) == 7:
                                     pose_7d = single_action
-                                    gripper_1d = np.array([1.0])  # 默认打开
+                                    gripper_1d = np.array([1.0])
                                 else:
                                     print(f"[客户端] 警告: 动作维度不匹配: {len(single_action)}")
                                     continue
@@ -628,20 +768,19 @@ class PolymetisInferenceClientSSH:
                             
                             current_pos_np = current_pos.cpu().numpy()
                             delta_pos = target_pos - current_pos_np
-                            scaled_target_pos = current_pos_np + delta_pos * ACTION_SCALE
+                            scaled_target_pos = current_pos_np + delta_pos * self.action_scale
                             scaled_target_quat = target_quat
                             
                             with self.target_lock:
                                 self.current_target_pos = scaled_target_pos
                                 self.current_target_quat = scaled_target_quat
                             
-                            # 夹爪控制：只在状态变化时执行
+                            # 夹爪控制
                             if self.gripper is not None and target_gripper_open != self.last_gripper_state:
                                 action_name = "打开" if target_gripper_open else "关闭"
                                 print(f"[客户端] 夹爪{action_name}...")
                                 try:
                                     if target_gripper_open:
-                                        # 打开：使用 goto
                                         self.gripper.goto(
                                             width=0.09,
                                             speed=0.3,
@@ -649,7 +788,6 @@ class PolymetisInferenceClientSSH:
                                             blocking=True
                                         )
                                     else:
-                                        # 关闭/抓取：使用 grasp
                                         self.gripper.grasp(
                                             speed=0.2,
                                             force=1.0,
@@ -658,7 +796,6 @@ class PolymetisInferenceClientSSH:
                                             epsilon_outer=0.1,
                                             blocking=True
                                         )
-                                    # 验证夹爪状态
                                     actual_width = self.gripper.get_state().width
                                     print(f"✓ 夹爪已{action_name} (实际宽度: {actual_width:.4f}m)")
                                     self.last_gripper_state = target_gripper_open
@@ -684,14 +821,14 @@ class PolymetisInferenceClientSSH:
                             
                             print(f"[客户端] 执行动作 #{self.actions_received} 步 {step_idx+1}/{len(action_sequence_final)}")
                             
-                            # 更新上一次执行的动作（用于下次过滤）
+                            # 更新上一次执行的动作
                             if step_idx == len(action_sequence_final) - 1:
                                 self.last_action_output = (target_pos.copy(), target_quat.copy())
                         
-                        # 更新迭代索引（根据实际执行的动作数量）
+                        # 更新迭代索引
                         self.iter_idx += len(action_sequence_final)
                         
-                        # 等待到下一个推理周期（关键：控制推理频率）
+                        # 等待到下一个推理周期
                         wait_until = t_cycle_end - frame_latency
                         wait_time = wait_until - time.monotonic()
                         if wait_time > 0:
@@ -699,7 +836,6 @@ class PolymetisInferenceClientSSH:
                         else:
                             print(f"[客户端] 警告: 推理+执行超时 {-wait_time:.3f}s")
                 else:
-                    # 没有收到动作，等待一小段时间
                     time.sleep(0.01)
                 
             except Exception as e:
@@ -707,8 +843,9 @@ class PolymetisInferenceClientSSH:
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.1)
-    
+
     def _save_trajectory_log(self):
+        """保存轨迹日志"""
         try:
             from datetime import datetime
             
@@ -735,8 +872,9 @@ class PolymetisInferenceClientSSH:
             print(f"[客户端] 轨迹日志已保存: {log_file}")
         except Exception as e:
             print(f"[客户端] 保存轨迹日志失败: {e}")
-    
+
     def stop(self):
+        """停止客户端"""
         self.running = False
         
         if self.control_thread and self.control_thread.is_alive():
@@ -745,8 +883,8 @@ class PolymetisInferenceClientSSH:
         if self.camera:
             self.camera.stop()
         
-        self.ssh_tunnel.close()
-        self.ssh_tunnel.stop_tunnel()
+        self.client.close()
+        self.client.stop_tunnel()
         
         print(f"\n[客户端] ✓ 已停止")
         print(f"[客户端] 总共发送 {self.observations_sent} 个观测")
@@ -757,10 +895,19 @@ class PolymetisInferenceClientSSH:
         self._save_trajectory_log()
 
 
-if __name__ == "__main__":
-    client = PolymetisInferenceClientSSH()
+def main():
+    parser = argparse.ArgumentParser(description='Polymetis 推理客户端')
+    parser.add_argument('--mode', '-m', type=str, choices=['local', 'ssh'], default='local',
+                        help='连接模式: local (本地直连) 或 ssh (SSH隧道)')
+    args = parser.parse_args()
+    
+    client = PolymetisInferenceClient(mode=args.mode)
     try:
         client.run()
     except KeyboardInterrupt:
         print("\n[客户端] 检测到 Ctrl+C，正在停止...")
         client.stop()
+
+
+if __name__ == "__main__":
+    main()
