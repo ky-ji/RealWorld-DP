@@ -344,56 +344,32 @@ class DPInferenceServerSSH:
                 images_b64 = data.get('images', [])
                 poses_list = data.get('poses', [])
                 grippers_list = data.get('grippers', [])
-                client_timestamps = data.get('timestamps', []) # 客户端捕获时刻（相对时间戳）
+                client_timestamps = data.get('timestamps', [])  # 相对时间戳（用于observation对齐）
+                client_send_timestamp = data.get('send_timestamp')  # 绝对时间戳（用于计算通信延迟）
                 
-                # 记录最新的客户端时间戳（用于计算传输延迟）
+                # 记录最新的客户端相对时间戳（用于显示/对齐）
                 latest_client_relative_ts = client_timestamps[-1] if client_timestamps else 0
                 
-                # 检测时间戳类型：如果时间戳很大（>1000000000），可能是绝对Unix时间戳
-                # 否则假设是相对时间戳（从episode开始）
-                is_absolute_timestamp = abs(latest_client_relative_ts) > 1000000000
-                
-                if is_absolute_timestamp:
-                    # 客户端发送的是绝对时间戳，直接使用
-                    latest_client_absolute_ts = latest_client_relative_ts
-                else:
-                    # 客户端发送的是相对时间戳，需要转换
-                    # 如果是第一个observation，记录基准时间
-                    if self.first_client_timestamp is None:
-                        self.first_client_timestamp = latest_client_relative_ts
-                        if self.episode_start_time is None:
-                            # 如果没有reset，使用当前时间作为episode开始时间
-                            self.episode_start_time = recv_timestamp
-                    
-                # 将客户端相对时间戳转换为绝对时间戳（用于延迟计算）
-                # 注意：这个转换假设客户端和服务器时间同步，实际上可能不准确
-                # 更准确的方法是客户端发送绝对时间戳，或者使用消息间隔作为网络延迟的近似
-                if self.first_client_timestamp is not None:
-                    latest_client_absolute_ts = self.episode_start_time + (latest_client_relative_ts - self.first_client_timestamp)
-                else:
-                    # 如果还没有记录第一个时间戳，使用当前接收时间作为近似
-                    latest_client_absolute_ts = recv_timestamp
-                
-                # 计算消息间隔（更准确的网络传输延迟近似）
-                # 这是服务器收到消息之间的时间间隔，可以作为网络延迟的参考
+                # 计算消息间隔（服务器端测量，作为参考）
                 message_interval = None
                 if self.last_recv_timestamp is not None:
                     message_interval = recv_timestamp - self.last_recv_timestamp
                 self.last_recv_timestamp = recv_timestamp
                 
-                # 安全检查：如果计算出的延迟异常大（>10秒），可能是时间戳处理错误
-                calculated_latency = recv_timestamp - latest_client_absolute_ts
-                if abs(calculated_latency) > 10:
-                    print(f"[警告] 检测到异常的传输延迟计算: {calculated_latency:.3f}秒")
-                    print(f"  客户端相对时间戳: {latest_client_relative_ts}")
-                    print(f"  服务器接收时间: {recv_timestamp}")
-                    print(f"  Episode开始时间: {self.episode_start_time}")
-                    print(f"  第一个客户端时间戳: {self.first_client_timestamp}")
-                    print(f"  消息间隔: {message_interval:.3f}秒" if message_interval else "  消息间隔: N/A")
-                    # 如果延迟异常，使用消息间隔作为替代
-                    if message_interval is not None and message_interval < 10:
-                        print(f"  使用消息间隔作为传输延迟近似: {message_interval:.3f}秒")
-                        latest_client_absolute_ts = recv_timestamp - message_interval
+                # 计算通信延迟（使用客户端发送的绝对时间戳）
+                if client_send_timestamp is not None:
+                    transport_latency = recv_timestamp - client_send_timestamp
+                    # 安全检查：如果延迟为负或异常大，可能是时钟不同步
+                    if transport_latency < 0:
+                        print(f"[警告] 检测到负延迟 {transport_latency*1000:.1f}ms，时钟可能不同步")
+                    elif transport_latency > 5:
+                        print(f"[警告] 检测到异常大延迟 {transport_latency*1000:.1f}ms")
+                    elif self.verbose:
+                        print(f"[通信延迟] {transport_latency*1000:.1f}ms")
+                else:
+                    # 兼容旧版客户端：使用消息间隔作为近似
+                    transport_latency = message_interval if message_interval is not None else 0
+                    print(f"[警告] 客户端未发送 send_timestamp，使用消息间隔作为近似: {transport_latency*1000:.1f}ms")
 
                 # 解码图像
                 images = []
@@ -430,11 +406,11 @@ class DPInferenceServerSSH:
                 action = self._infer_action(
                     env_obs, 
                     np.array(client_timestamps), 
-                    recv_timestamp, 
-                    latest_client_absolute_ts,  # 使用转换后的绝对时间戳
-                    latest_client_relative_ts,  # 同时保存相对时间戳用于显示
+                    recv_timestamp,
+                    client_send_timestamp,  # 客户端发送时的绝对时间戳
+                    transport_latency,  # 已计算的通信延迟
                     process_start_time,
-                    message_interval,  # 消息间隔（作为网络延迟的参考）
+                    message_interval,  # 消息间隔（作为参考）
                     last_image_b64  # 原始 base64 图片（用于日志保存）
                 )
                 
@@ -446,10 +422,13 @@ class DPInferenceServerSSH:
                 # --- 记录发送时间 ---
                 send_timestamp = time.time()
                 
-                # 更新当前日志条目的发送时间
+                # 更新当前日志条目的发送时间和总延迟
                 if self.inference_log['steps']:
                     self.inference_log['steps'][-1]['timing']['send_timestamp'] = send_timestamp
-                    self.inference_log['steps'][-1]['timing']['total_latency'] = send_timestamp - latest_client_absolute_ts
+                    # 总延迟 = 发送时间 - 客户端发送时间（如果可用）
+                    if client_send_timestamp is not None:
+                        total_latency = send_timestamp - client_send_timestamp
+                        self.inference_log['steps'][-1]['timing']['total_latency_ms'] = float(total_latency * 1000)
         
         except Exception as e:
             print(f"[推理服务器] 处理错误: {e}")
@@ -457,8 +436,8 @@ class DPInferenceServerSSH:
             traceback.print_exc()
 
     def _infer_action(self, env_obs: dict, timestamps: np.ndarray, 
-                      recv_timestamp: float, client_capture_absolute_ts: float, 
-                      client_capture_relative_ts: float, process_start_time: float,
+                      recv_timestamp: float, client_send_timestamp: Optional[float],
+                      transport_latency: float, process_start_time: float,
                       message_interval: Optional[float] = None,
                       raw_image_b64: Optional[str] = None) -> np.ndarray:
         try:
@@ -511,28 +490,22 @@ class DPInferenceServerSSH:
                     lowdim_obs_list.append(env_obs[lowdim_key][-1])
             last_state = np.concatenate(lowdim_obs_list) if lowdim_obs_list else np.array([])
 
-            # 计算传输延迟
-            # 注意：由于客户端发送的是相对时间戳，这个延迟计算可能不准确
-            # 如果message_interval可用且合理，可以作为参考
-            transport_latency = recv_timestamp - client_capture_absolute_ts
-            if message_interval is not None and abs(transport_latency) > 10:
-                # 如果计算出的延迟异常，使用消息间隔作为参考
-                # 但这不是真正的传输延迟，只是消息间隔
-                transport_latency = message_interval if message_interval > 0 else transport_latency
+            # 提取最后一个相对时间戳用于显示
+            last_relative_ts = float(timestamps[-1]) if len(timestamps) > 0 else 0.0
             
             current_step = {
                 'step': len(self.inference_log['steps']),
                 'timing': {
-                    'client_capture': float(client_capture_relative_ts),  # 客户端拍照时间（相对时间戳，用于显示）
-                    'client_capture_absolute': float(client_capture_absolute_ts),  # 客户端拍照时间（绝对时间戳，可能不准确）
+                    'client_send': float(client_send_timestamp) if client_send_timestamp is not None else None,  # 客户端发送时间（绝对时间戳）
+                    'client_obs_relative': last_relative_ts,  # 客户端观测时间（相对时间戳，用于对齐）
                     'server_recv': float(recv_timestamp),             # 服务器收到时间
                     'process_start': float(process_start_time),       # 开始处理时间
                     'infer_start': float(infer_start_time),           # 开始模型推理
                     'infer_end': float(infer_end_time),               # 结束模型推理
                     'send_timestamp': 0.0,                            # 发送时间 (process_message中更新)
-                    'transport_latency': float(transport_latency),   # 传输延时（注意：可能不准确，因为客户端时间戳是相对的）
-                    'message_interval': float(message_interval) if message_interval is not None else None,  # 消息间隔（服务器端测量）
-                    'inference_latency': float(infer_end_time - infer_start_time)          # 推理延时
+                    'transport_latency_ms': float(transport_latency * 1000),  # 通信延迟（毫秒）
+                    'message_interval_ms': float(message_interval * 1000) if message_interval is not None else None,  # 消息间隔（毫秒）
+                    'inference_latency_ms': float((infer_end_time - infer_start_time) * 1000)  # 推理延迟（毫秒）
                 },
                 'input': {
                     'state': last_state.astype(np.float32).tolist(),

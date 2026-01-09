@@ -680,12 +680,15 @@ class PolymetisInferenceClient:
                     images_b64.append(base64.b64encode(img_encoded).decode('utf-8'))
                 
                 # 发送观测
+                # 使用绝对时间戳（Unix timestamp）用于准确计算通信延迟
+                send_timestamp = time.time()
                 obs_msg = {
                     'type': 'observation',
                     'images': images_b64,
                     'poses': aligned_obs['poses'].astype(np.float32).tolist(),
                     'grippers': aligned_obs['grippers'].astype(np.float32).tolist(),
-                    'timestamps': aligned_obs['timestamps'].tolist()
+                    'timestamps': aligned_obs['timestamps'].tolist(),  # 相对时间戳（用于observation对齐）
+                    'send_timestamp': send_timestamp  # 绝对时间戳（用于计算通信延迟）
                 }
                 
                 if self.client.send_data(obs_msg):
