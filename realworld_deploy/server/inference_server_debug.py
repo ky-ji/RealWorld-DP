@@ -424,6 +424,9 @@ class DPInferenceServerSSH:
                         env_obs[lowdim_key] = grippers
 
                 # --- 运行推理并传递时间信息 ---
+                # 直接传递原始 base64，避免重新编码
+                last_image_b64 = images_b64[-1] if images_b64 else None
+                
                 action = self._infer_action(
                     env_obs, 
                     np.array(client_timestamps), 
@@ -431,7 +434,8 @@ class DPInferenceServerSSH:
                     latest_client_absolute_ts,  # 使用转换后的绝对时间戳
                     latest_client_relative_ts,  # 同时保存相对时间戳用于显示
                     process_start_time,
-                    message_interval  # 消息间隔（作为网络延迟的参考）
+                    message_interval,  # 消息间隔（作为网络延迟的参考）
+                    last_image_b64  # 原始 base64 图片（用于日志保存）
                 )
                 
                 # 发送响应
@@ -455,7 +459,8 @@ class DPInferenceServerSSH:
     def _infer_action(self, env_obs: dict, timestamps: np.ndarray, 
                       recv_timestamp: float, client_capture_absolute_ts: float, 
                       client_capture_relative_ts: float, process_start_time: float,
-                      message_interval: Optional[float] = None) -> np.ndarray:
+                      message_interval: Optional[float] = None,
+                      raw_image_b64: Optional[str] = None) -> np.ndarray:
         try:
             # 记录开始推理时间
             infer_start_time = time.time()
@@ -496,13 +501,8 @@ class DPInferenceServerSSH:
                       f"max_pos={self.max_delta_position:.3f}, max_rot={self.max_delta_rotation:.3f}")
 
             # --- 保存日志 (含图片和时间戳) ---
-            # 为了避免日志过大，我们将图片重新编码为 JPEG Base64
-            last_img_array = env_obs[self.obs_keys['rgb']][-1] # (H, W, C)
-            # RGB -> BGR for opencv encoding
-            last_img_bgr = cv2.cvtColor(last_img_array, cv2.COLOR_RGB2BGR)
-            # Encode
-            _, buffer = cv2.imencode('.jpg', last_img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            img_b64_str = base64.b64encode(buffer).decode('utf-8')
+            # 直接使用客户端发送的原始 base64，避免重新编码（零开销、无损）
+            img_b64_str = raw_image_b64
             
             # 提取当前状态
             lowdim_obs_list = []
