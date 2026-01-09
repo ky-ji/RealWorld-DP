@@ -167,6 +167,7 @@ dmypy.json
 
 # Server logs and runtime files
 **/server/log/
+realworld_deploy/server/log
 **/log/
 **/*_server.log
 **/inference_server.log

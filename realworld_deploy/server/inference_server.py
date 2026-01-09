@@ -21,7 +21,9 @@ import dill
 import sys
 
 # 添加 diffusion_policy 路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 从 realworld_deploy/server/inference_server.py 到项目根目录需要向上3级
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
