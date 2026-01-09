@@ -292,7 +292,7 @@ class PolymetisInferenceClient:
                 from inference_config_local import (
                     SERVER_IP, SERVER_PORT,
                     ROBOT_IP, ROBOT_PORT, GRIPPER_PORT,
-                    CAMERA_TYPE, CAMERA_INDEX, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
+                    CAMERA_TYPE, CAMERA_INDEX, CAMERA_SERIAL_NUMBER, CAMERA_RESOLUTION, IMAGE_QUALITY, ENABLE_DEPTH,
                     INFERENCE_FREQ, N_OBS_STEPS, CAMERA_FREQ,
                     ACTION_SCALE, STEPS_PER_INFERENCE,
                     CARTESIAN_KX, CARTESIAN_KXD,
@@ -302,7 +302,7 @@ class PolymetisInferenceClient:
                     'server_ip': SERVER_IP, 'server_port': SERVER_PORT,
                     'robot_ip': ROBOT_IP, 'robot_port': ROBOT_PORT, 'gripper_port': GRIPPER_PORT,
                     'camera_type': CAMERA_TYPE, 'camera_index': CAMERA_INDEX,
-                    'camera_serial_number': None,
+                    'camera_serial_number': CAMERA_SERIAL_NUMBER,
                     'camera_resolution': CAMERA_RESOLUTION, 'image_quality': IMAGE_QUALITY,
                     'enable_depth': ENABLE_DEPTH,
                     'inference_freq': INFERENCE_FREQ, 'n_obs_steps': N_OBS_STEPS,

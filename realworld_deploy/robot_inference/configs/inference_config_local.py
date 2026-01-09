@@ -29,6 +29,7 @@ CARTESIAN_KXD = [40, 40, 40, 3, 3, 3]         # 笛卡尔阻尼
 # ==================== 摄像头配置 ====================
 CAMERA_TYPE = 'realsense'    # 相机类型: 'realsense' 或 'usb'
 CAMERA_INDEX = 0             # 摄像头索引（仅 USB 相机使用）
+CAMERA_SERIAL_NUMBER = '944622073019'  # RealSense 相机序列号（用于多相机场景，对应 front_view）
 CAMERA_RESOLUTION = (1280, 720)  # 摄像头分辨率 (width, height)
 IMAGE_QUALITY = 80           # JPEG 压缩质量 (1-100)
 ENABLE_DEPTH = True          # 是否启用深度（仅 RealSense 相机）
