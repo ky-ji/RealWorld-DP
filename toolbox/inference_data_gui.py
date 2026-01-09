@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from pathlib import Path
 import sys
+import base64
+import cv2
 
 # --- 路径配置 ---
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# 尝试配置字体
 try:
     from toolbox.mpl_fonts import setup_matplotlib_fonts
     setup_matplotlib_fonts(verbose=False)
@@ -21,6 +21,27 @@ class InferenceGUI:
         self.log_path = log_path
         self.valid = False
         self.load_data()
+    
+    def _get_latency_ms(self, timing_dict, key_base):
+        """
+        安全地获取时延值（兼容新旧格式）
+        
+        Args:
+            timing_dict: 时间信息字典
+            key_base: 字段名基础（如 'transport_latency'）
+        
+        Returns:
+            时延值（毫秒）
+        """
+        # 优先使用新版格式（已经是毫秒）
+        new_key = f"{key_base}_ms"
+        if new_key in timing_dict and timing_dict[new_key] is not None:
+            return timing_dict[new_key]
+        # 使用旧版格式（秒转毫秒）
+        old_key = key_base
+        if old_key in timing_dict and timing_dict[old_key] is not None:
+            return timing_dict[old_key] * 1000
+        return 0.0
 
     def load_data(self):
         try:
@@ -29,284 +50,195 @@ class InferenceGUI:
             
             self.steps = self.log_data.get('steps', [])
             if not self.steps:
-                st.error("日志文件为空或格式错误")
+                st.error("日志文件为空")
                 return
 
-            # 提取数据
             self.states = []
-            self.actions = [] # 预测的动作序列
-            self.timestamps = []
+            self.actions = []
+            self.images = [] # 存储 Base64 字符串
+            self.timings = [] # 存储时间信息
             
             for step in self.steps:
-                # 状态 (实际发生的事)
-                state = step.get('input', {}).get('state', [])
-                self.states.append(state)
-                
-                # 时间戳
-                timestamp = step.get('input', {}).get('timestamp', 0)
-                self.timestamps.append(timestamp)
-                
-                # 动作 (模型预测的未来)
+                # State
+                self.states.append(step.get('input', {}).get('state', []))
+                # Action
                 action_data = step.get('action', {})
-                action_values = action_data.get('values', []) # 通常是 (T_pred, Dim)
-                self.actions.append(action_values)
+                self.actions.append(action_data.get('values', []))
+                # Image
+                self.images.append(step.get('input', {}).get('image_base64', None))
+                # Timing
+                self.timings.append(step.get('timing', {}))
             
             self.states = np.array(self.states)
-            self.timestamps = np.array(self.timestamps)
-            # actions 是列表的列表，因为每次预测长度可能不同，或者为了效率保持 list
-            
             self.valid = True
-            self.state_dim = self.states.shape[1] if len(self.states) > 0 else 0
             
         except Exception as e:
             st.error(f"加载失败: {e}")
             self.valid = False
 
+    def decode_image(self, b64_str):
+        if not b64_str: return None
+        try:
+            img_data = base64.b64decode(b64_str)
+            img_array = np.frombuffer(img_data, dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        except:
+            return None
+
     def plot_replay_frame(self, step_idx):
-        """核心功能：绘制某一帧的‘过去’与‘未来’"""
         if not self.valid: return
 
-        # 1. 获取数据
-        # 历史轨迹 (0 -> current)
-        history_traj = self.states[:step_idx+1]
+        # 获取数据
         current_state = self.states[step_idx]
-        
-        # 预测轨迹 (current -> future)
         pred_traj = np.array(self.actions[step_idx])
-        
-        # 2. 创建画布
-        fig = plt.figure(figsize=(14, 8))
-        gs = GridSpec(2, 2, figure=fig)
+        img = self.decode_image(self.images[step_idx])
+        timing = self.timings[step_idx]
 
-        # --- 子图 1: 3D 空间轨迹 (上帝视角) ---
-        ax3d = fig.add_subplot(gs[:, 0], projection='3d')
+        # --- 布局设计 ---
+        # 第一行：左侧图像，右侧3D轨迹
+        c1, c2 = st.columns([1, 1.5])
         
-        # A. 画历史 (灰色)
-        if len(history_traj) > 1:
-            ax3d.plot(history_traj[:, 0], history_traj[:, 1], history_traj[:, 2], 
-                     'k-', alpha=0.3, linewidth=1, label='History (Actual)')
-        
-        # B. 画当前点 (蓝色大点)
-        ax3d.scatter(current_state[0], current_state[1], current_state[2], 
-                    c='b', s=100, label='Current', zorder=10)
-        
-        # C. 画预测 (红色虚线)
-        if len(pred_traj) > 0:
-            # 预测轨迹通常是绝对坐标，如果它是相对坐标，这里需要额外处理。
-            # 假设日志记录的是绝对坐标（常见情况）
-            ax3d.plot(pred_traj[:, 0], pred_traj[:, 1], pred_traj[:, 2], 
-                     'r--', linewidth=2, label='Prediction (Plan)')
-            ax3d.scatter(pred_traj[-1, 0], pred_traj[-1, 1], pred_traj[-1, 2], 
-                        c='r', s=50, marker='x')
-
-        ax3d.set_title(f"Step {step_idx}: 3D 空间轨迹", fontsize=12)
-        ax3d.set_xlabel('X'); ax3d.set_ylabel('Y'); ax3d.set_zlabel('Z')
-        ax3d.legend(loc='upper left', fontsize=9)
-        
-        # 设置一致的视角范围，避免画面抖动
-        # 以整个数据集的范围为基准
-        margin = 0.1
-        x_min, x_max = self.states[:,0].min(), self.states[:,0].max()
-        y_min, y_max = self.states[:,1].min(), self.states[:,1].max()
-        z_min, z_max = self.states[:,2].min(), self.states[:,2].max()
-        ax3d.set_xlim(x_min-margin, x_max+margin)
-        ax3d.set_ylim(y_min-margin, y_max+margin)
-        ax3d.set_zlim(z_min-margin, z_max+margin)
-
-        # --- 子图 2: XYZ 时间曲线 (展开视角) ---
-        ax2d = fig.add_subplot(gs[0, 1])
-        
-        # 定义显示窗口：显示过去 50 步 + 未来预测
-        window_start = max(0, step_idx - 50)
-        hist_steps = np.arange(window_start, step_idx + 1)
-        hist_data = self.states[window_start:step_idx + 1]
-        
-        # 预测的时间轴 (紧接在当前步之后)
-        pred_steps = np.arange(step_idx, step_idx + len(pred_traj))
-        
-        colors = ['r', 'g', 'b']
-        labels = ['X', 'Y', 'Z']
-        
-        for i in range(3): # 只画 XYZ
-            if i >= self.state_dim: break
-            # 历史实线
-            ax2d.plot(hist_steps, hist_data[:, i], color=colors[i], alpha=0.4, linestyle='-')
-            # 当前点
-            ax2d.scatter(step_idx, current_state[i], color=colors[i], s=30)
-            # 预测虚线
-            if len(pred_traj) > 0:
-                ax2d.plot(pred_steps, pred_traj[:, i], color=colors[i], linestyle='--', linewidth=1.5, label=f'{labels[i]} Pred')
-
-        ax2d.set_title("XYZ 随时间变化 (实线=历史, 虚线=预测)", fontsize=10)
-        ax2d.axvline(x=step_idx, color='k', linestyle=':', alpha=0.5)
-        ax2d.grid(True, alpha=0.3)
-        
-        # --- 子图 3: 夹爪/其他维度 ---
-        ax_btm = fig.add_subplot(gs[1, 1])
-        if self.state_dim >= 8: # 假设第8维是夹爪
-            gripper_idx = 7
-            ax_btm.plot(hist_steps, hist_data[:, gripper_idx], 'k-', alpha=0.6, label='Gripper Hist')
-            if len(pred_traj) > 0:
-                ax_btm.plot(pred_steps, pred_traj[:, gripper_idx], 'r--', label='Gripper Pred')
-            ax_btm.set_title("夹爪状态 (Gripper)", fontsize=10)
-            ax_btm.set_ylim(-0.1, 1.1)
-            ax_btm.grid(True, alpha=0.3)
-        else:
-            # 如果没有夹爪，显示四元数的第一维或者留空
-            ax_btm.text(0.5, 0.5, "无夹爪数据", ha='center')
-        
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-    def plot_consistency_analysis(self):
-        """分析预测的一致性（抖动）"""
-        if len(self.actions) < 2:
-            st.warning("数据不足以进行一致性分析")
-            return
-
-        # 计算抖动：第 T 步预测的动作[0] vs 第 T+1 步预测的动作[0] (或实际执行的差异)
-        # 这里我们计算：模型在 Step T 计划要去的位置，和它在 Step T+1 真正去的位置的差异，
-        # 以及模型在 Step T 对 T+1 的预测，和 Step T+1 对 T+1 的预测的差异。
-        
-        jitter_metrics = []
-        for i in range(len(self.actions) - 1):
-            curr_pred = np.array(self.actions[i])
-            next_pred = np.array(self.actions[i+1])
-            
-            if len(curr_pred) > 1 and len(next_pred) > 0:
-                # 比较: Step T 预测的 "下一刻" (index 1) vs Step T+1 预测的 "当前" (index 0)
-                # 理论上这两个应该很接近
-                diff = np.linalg.norm(curr_pred[1, :3] - next_pred[0, :3])
-                jitter_metrics.append(diff)
+        with c1:
+            st.markdown("#### 👁️ 模型视觉观测")
+            if img is not None:
+                st.image(img, caption=f"Step {step_idx} Input (Size: {img.shape})", use_container_width=True)
             else:
-                jitter_metrics.append(0.0)
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-        
-        # 1. 抖动曲线
-        ax1.plot(jitter_metrics, color='purple', alpha=0.7)
-        ax1.set_title("预测抖动 (Prediction Jitter)", fontsize=12)
-        ax1.set_ylabel("位移偏差 (m)")
-        ax1.text(0, np.max(jitter_metrics)*0.9, "数值越低越平滑\n表示模型意图稳定", bbox=dict(facecolor='white', alpha=0.8))
-        ax1.grid(True, alpha=0.3)
-
-        # 2. 推理耗时 (如果有时间戳)
-        if len(self.timestamps) > 1:
-            latencies = np.diff(self.timestamps) * 1000 # 转毫秒
-            ax2.hist(latencies, bins=30, color='teal', alpha=0.7)
-            ax2.axvline(np.mean(latencies), color='r', linestyle='--', label=f'Mean: {np.mean(latencies):.1f}ms')
-            ax2.set_title("推理延迟分布 (Inference Latency)", fontsize=12)
-            ax2.set_xlabel("耗时 (ms)")
-            ax2.legend()
-        else:
-            ax2.text(0.5, 0.5, "无时间戳数据", ha='center')
-
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-    def compare_with_training(self, zarr_path):
-        """对比训练集分布"""
-        try:
-            import zarr
-            root = zarr.open(zarr_path, mode='r')
-            train_actions = root['data']['action'][:]
+                st.warning("无图像数据 (旧版日志?)")
             
-            # 提取推理的所有首个预测动作
-            inf_actions = []
-            for a in self.actions:
-                if len(a) > 0: inf_actions.append(a[0])
-            inf_actions = np.array(inf_actions)
+            # 显示关键时延指标（兼容新旧格式）
+            if timing:
+                t_transport = self._get_latency_ms(timing, 'transport_latency')
+                t_infer = self._get_latency_ms(timing, 'inference_latency')
+                total = self._get_latency_ms(timing, 'total_latency')
+                
+                st.markdown("#### ⏱️ 时延诊断")
+                col_t1, col_t2, col_t3 = st.columns(3)
+                col_t1.metric("传输延迟", f"{t_transport:.0f} ms", help="客户端拍照 -> 服务器接收")
+                col_t2.metric("推理耗时", f"{t_infer:.0f} ms", help="模型前向传播时间")
+                col_t3.metric("总回路", f"{total:.0f} ms", help="拍照 -> 收到动作")
+                
+                if t_transport > 100:
+                    st.error(f"⚠️ 传输延迟过高 ({t_transport:.0f}ms)! 检查网络或 SSH 隧道")
+                
+                # 显示详细时间戳（如果可用）
+                if timing.get('client_send') is not None:
+                    st.markdown("#### 📊 详细时间线")
+                    with st.expander("展开查看时间戳详情"):
+                        if timing.get('client_send'):
+                            st.text(f"客户端发送: {timing.get('client_send', 'N/A')}")
+                        if timing.get('server_recv'):
+                            st.text(f"服务器接收: {timing.get('server_recv', 'N/A')}")
+                        if timing.get('infer_start'):
+                            st.text(f"推理开始: {timing.get('infer_start', 'N/A')}")
+                        if timing.get('infer_end'):
+                            st.text(f"推理结束: {timing.get('infer_end', 'N/A')}")
+                        if timing.get('send_timestamp'):
+                            st.text(f"发送时间: {timing.get('send_timestamp', 'N/A')}")
+                        if timing.get('message_interval_ms') is not None:
+                            st.text(f"消息间隔: {timing.get('message_interval_ms', 'N/A'):.1f} ms")
 
-            st.write("### 分布对比")
+        with c2:
+            st.markdown("#### 🗺️ 3D 动作规划")
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
             
-            fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-            labels = ['X', 'Y', 'Z']
+            # 画历史轨迹 (最近50步)
+            start = max(0, step_idx - 50)
+            hist = self.states[start:step_idx+1]
+            if len(hist) > 1:
+                ax.plot(hist[:,0], hist[:,1], hist[:,2], 'k-', alpha=0.3, label='History')
             
-            for i in range(3):
-                ax = axes[i]
-                # 训练集
-                ax.hist(train_actions[:, i], bins=50, density=True, alpha=0.4, color='blue', label='Train')
-                # 推理集
-                if len(inf_actions) > 0:
-                    ax.hist(inf_actions[:, i], bins=30, density=True, alpha=0.6, color='red', label='Inference')
-                ax.set_title(f"{labels[i]} 轴分布")
-                if i == 0: ax.legend()
+            # 画当前点
+            ax.scatter(current_state[0], current_state[1], current_state[2], c='b', s=100, label='Current')
+            
+            # 画预测
+            if len(pred_traj) > 0:
+                ax.plot(pred_traj[:,0], pred_traj[:,1], pred_traj[:,2], 'r--', linewidth=2, label='Pred')
+                ax.scatter(pred_traj[-1,0], pred_traj[-1,1], pred_traj[-1,2], c='r', marker='x')
+
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.legend()
+            
+            # 固定坐标轴防止抖动
+            margin = 0.1
+            ax.set_xlim(self.states[:,0].min()-margin, self.states[:,0].max()+margin)
+            ax.set_ylim(self.states[:,1].min()-margin, self.states[:,1].max()+margin)
+            ax.set_zlim(self.states[:,2].min()-margin, self.states[:,2].max()+margin)
             
             st.pyplot(fig)
             plt.close(fig)
 
-        except Exception as e:
-            st.error(f"读取训练集失败: {e}")
+    def plot_latency_analysis(self):
+        if not self.timings:
+            st.warning("当前日志不包含时延数据")
+            return
+        
+        # 检查是否有新版或旧版格式的时延数据
+        has_new_format = any('inference_latency_ms' in t for t in self.timings)
+        has_old_format = any('inference_latency' in t and 'inference_latency_ms' not in t for t in self.timings)
+        
+        if not (has_new_format or has_old_format):
+            st.warning("当前日志不包含详细时延数据")
+            return
 
-# --- 界面布局 ---
+        steps = range(len(self.timings))
+        # 兼容新旧格式：使用辅助函数安全获取时延值
+        trans_lats = [self._get_latency_ms(t, 'transport_latency') for t in self.timings]
+        infer_lats = [self._get_latency_ms(t, 'inference_latency') for t in self.timings]
+        total_lats = [self._get_latency_ms(t, 'total_latency') for t in self.timings]
 
-st.set_page_config(layout="wide", page_title="Inference Log Analyst")
-st.sidebar.title("🧠 推理日志分析")
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(steps, total_lats, color='gray', alpha=0.3, label='Total Loop')
+        ax.plot(steps, trans_lats, color='orange', label='Transport (Network)')
+        ax.plot(steps, infer_lats, color='blue', label='Inference (GPU)')
+        
+        ax.set_title("时延组成分析 (ms)")
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Latency (ms)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # 添加阈值线
+        ax.axhline(100, color='r', linestyle='--', alpha=0.5)
+        ax.text(0, 105, '100ms Alert', color='r', fontsize=8)
+        
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # 显示统计信息
+        if total_lats:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("平均总延迟", f"{np.mean(total_lats):.1f} ms")
+            col2.metric("平均传输延迟", f"{np.mean(trans_lats):.1f} ms")
+            col3.metric("平均推理延迟", f"{np.mean(infer_lats):.1f} ms")
+            col4.metric("最大总延迟", f"{np.max(total_lats):.1f} ms")
 
-# 1. 自动寻找日志
-default_log_dir = Path(__file__).parent.parent / "server" / "log"
-log_files = []
-if default_log_dir.exists():
-    log_files = sorted(list(default_log_dir.glob("inference_log_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
+# --- Main ---
+st.set_page_config(layout="wide", page_title="Inference Debugger")
+st.title("🔬 推理深度诊断工具")
 
-# 2. 侧边栏文件选择
+log_dir = Path(__file__).parent.parent / "realworld_deploy" / "server" / "log"
+log_files = sorted(list(log_dir.glob("inference_log_*.json")), key=lambda x: x.stat().st_mtime, reverse=True)
+
 if log_files:
-    selected_file = st.sidebar.selectbox("选择日志文件", log_files, format_func=lambda x: x.name)
-    log_path = str(selected_file)
+    selected_file = st.sidebar.selectbox("选择日志", log_files, format_func=lambda x: x.name)
+    if 'gui' not in st.session_state or st.session_state.get('last_log') != selected_file:
+        st.session_state.gui = InferenceGUI(str(selected_file))
+        st.session_state.last_log = selected_file
 else:
-    log_path = st.sidebar.text_input("输入日志文件路径", "inference_log.json")
+    st.error("未找到日志文件")
 
-# 3. 加载
-if 'gui' not in st.session_state or st.session_state.log_path_cache != log_path:
-    if Path(log_path).exists():
-        st.session_state.gui = InferenceGUI(log_path)
-        st.session_state.log_path_cache = log_path
-    else:
-        st.sidebar.warning("文件不存在")
-
-# 4. 主界面
 if 'gui' in st.session_state and st.session_state.gui.valid:
     gui = st.session_state.gui
     
-    # 顶部指标
-    col1, col2, col3 = st.columns(3)
-    col1.metric("总步数 (Steps)", len(gui.steps))
-    if len(gui.timestamps) > 1:
-        duration = gui.timestamps[-1] - gui.timestamps[0]
-        col2.metric("总耗时 (Duration)", f"{duration:.1f} s")
-        avg_freq = len(gui.steps) / duration if duration > 0 else 0
-        col3.metric("平均频率 (Freq)", f"{avg_freq:.1f} Hz")
-    
-    # 标签页
-    tab1, tab2, tab3 = st.tabs(["🕵️ 交互式回放 (Replay)", "📉 稳定性与延迟", "📊 训练集对比"])
+    tab1, tab2 = st.tabs(["📺 逐帧回放 (Visual & Action)", "📈 性能分析 (Latency)"])
     
     with tab1:
-        # 交互滑块
-        step_idx = st.slider("时间轴 (Step)", 0, len(gui.steps)-1, 0, key='replay_slider')
+        idx = st.slider("Step", 0, len(gui.steps)-1, 0)
+        gui.plot_replay_frame(idx)
         
-        # 显示当前步的详细数据
-        gui.plot_replay_frame(step_idx)
-        
-        # 显示具体数值
-        with st.expander("查看详细数值"):
-            st.write("当前状态 (State):", gui.states[step_idx])
-            st.write("预测动作 (Prediction):", np.array(gui.actions[step_idx]))
-
     with tab2:
-        st.markdown("#### 预测一致性分析")
-        st.caption("一致性衡量模型是否在每个时间步都做出类似的规划。如果抖动（Jitter）很大，说明模型在震荡。")
-        gui.plot_consistency_analysis()
-
-    with tab3:
-        zarr_input = st.text_input("输入训练集 Zarr 路径以进行对比", 
-                                  "/home/jikangye/workspace/baselines/vla-baselines/RealWorld-DP/data/demo_test.zarr")
-        if st.button("开始对比"):
-            if Path(zarr_input).exists():
-                gui.compare_with_training(zarr_input)
-            else:
-                st.error("Zarr 文件不存在")
-                
-else:
-    st.info("👈 请在左侧选择或输入有效的推理日志路径")
+        gui.plot_latency_analysis()
