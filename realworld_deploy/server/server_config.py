@@ -16,7 +16,7 @@ SERVER_PORT = 8007               # 推理服务器端口
 # 示例路径 (请根据实际训练输出更新):
 # - train_cogact.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d/checkpoints/
 # - train_cogact_clean.sh 输出: data/outputs/YYYY.MM.DD/HH.MM.SS_train_diffusion_transformer_hybrid_cogact_robot_7d_clean/checkpoints/
-CHECKPOINT_PATH = "/home/jikangye/workspace/baselines/vla-baselines/RealWorld-DP/data/outputs/2026.01.07/14.13.48_train_diffusion_transformer_hybrid_ddp_assembly_chocolate/checkpoints/epoch=0550-train_loss=0.057.ckpt"
+CHECKPOINT_PATH = "/home/yxlab/code/jikangye/RealWorld-DP/data/epoch=0550-train_loss=0.057.ckpt"
 USE_EMA = True                     # 是否使用 EMA 模型
 
 # 推理配置
